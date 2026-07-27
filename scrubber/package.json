@@ -1,0 +1,7 @@
+{
+  "name": "scrubber",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PII tokenization gateway between Drive/n8n and the agent workspace; vault stays out of agent reach",
+  "main": "server.js"
+}

@@ -1,0 +1,19 @@
+{
+  "_comment": "CORP template — internal enterprise hierarchy (enterprise > department > team > personal), no cross-department confidentiality walls. Departments handle block-level PII so they get dedicated runners; teams/individuals share their department's runner (bounded pool). Rename/extend the nodes. Applied by scripts/install.py --scope-template corp.",
+  "levels": ["enterprise", "department", "team", "personal"],
+  "workspaceRoot": "scopes",
+  "defaultScope": "enterprise",
+  "levelDefaults": {
+    "enterprise": { "pii": "block", "isolation": "pool", "promotion": "review", "identityGroup": "agents-all@example.com", "retentionDays": null },
+    "department": { "pii": "block", "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": null },
+    "team":       { "pii": "warn",  "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": null },
+    "personal":   { "pii": "warn",  "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": 90 }
+  },
+  "nodes": {
+    "enterprise":  { "level": "enterprise", "parent": null },
+    "engineering": { "level": "department", "parent": "enterprise" },
+    "data-team":   { "level": "team", "parent": "engineering" },
+    "you":         { "level": "personal", "parent": "data-team" }
+  },
+  "conflicts": { "pairs": [] }
+}

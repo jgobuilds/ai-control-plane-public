@@ -1,0 +1,71 @@
+{
+  "id": "brightworks-feedback",
+  "name": "Feedback → eval inbox (thumbs-down capture, SCAFFOLD)",
+  "meta": { "description": "Closes the agent improvement loop from a human thumbs-down to a captured regression case WITHOUT needing python inside n8n. A Webhook (or Manual) trigger receives { scope, prompt, output, verdict, note }; a Code node shapes it into a case record; a Write-file node drops it to eval/inbox/<id>.json. A human/operator then runs `python scripts/eval_capture.py --dataset <name> --ingest eval/inbox --scrubber-url ... --scrubber-token ...` to TOKENIZE the prompt and promote it into eval/datasets/<name>/, and `python scripts/eval_run.py` to gate. Ships INACTIVE. REQUIRES ./eval mounted into the n8n container (e.g. volume ./eval:/data/eval) so the Write node can reach eval/inbox. The raw prompt is only tokenized at the eval_capture step — if this webhook may receive raw client PII, terminate it inside the trusted network and treat eval/inbox as sensitive (it is .gitignored). See IMPROVEMENT-LOOP.md + EVAL.md." },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brightworks-feedback",
+        "options": {}
+      },
+      "id": "fbfbfbfb-0000-0000-0000-000000000001",
+      "name": "Feedback webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {},
+      "id": "fbfbfbfb-0000-0000-0000-000000000010",
+      "name": "Manual test trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [220, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shape an inbound thumbs-down into an eval INBOX record. This is NOT yet a\n// dataset case: scripts/eval_capture.py --ingest promotes it (tokenizing the\n// prompt via the scrubber) into eval/datasets/<name>/. A thumbs-down means the\n// output was wrong, so we default to a JUDGE grader whose goal is the reviewer's\n// note — the case should PASS once the fix lands. The record IS the item json so\n// the downstream convertToFile serializes exactly it (no wrapper fields).\nconst b = ($json.body) ? $json.body : $json;   // webhook wraps payload in .body\nconst scope = b.scope;\nif (!scope) { throw new Error('feedback: scope is required'); }\nconst ts = new Date();\nconst stamp = ts.toISOString().replace(/[:.]/g, '-');\nconst rand = Math.random().toString(16).slice(2, 8);\nconst id = `${(b.task_type || 'case')}-${stamp}-${rand}`;\nconst rec = {\n  id,\n  scope,\n  task_type: b.task_type || 'generate',\n  action: b.action || 'advise',\n  prompt: b.prompt || '',\n  output: b.output || '',\n  verdict: b.verdict || 'thumbs-down',\n  note: b.note || '',\n  source: 'feedback-flag',\n  created: ts.toISOString().slice(0, 10)\n};\n// Optional explicit grader passthrough (else eval_capture defaults to judge+note).\nif (b.grader) { rec.grader = b.grader; }\nreturn [{ json: rec }];"
+      },
+      "id": "fbfbfbfb-0000-0000-0000-000000000002",
+      "name": "Build case record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 380]
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "options": { "format": true },
+        "binaryPropertyName": "data"
+      },
+      "id": "fbfbfbfb-0000-0000-0000-000000000003",
+      "name": "Serialize record",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [680, 380]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ 'eval/inbox/' + $('Build case record').item.json.id + '.json' }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "fbfbfbfb-0000-0000-0000-000000000004",
+      "name": "Write to eval/inbox",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [900, 380]
+    }
+  ],
+  "connections": {
+    "Feedback webhook": { "main": [[{ "node": "Build case record", "type": "main", "index": 0 }]] },
+    "Manual test trigger": { "main": [[{ "node": "Build case record", "type": "main", "index": 0 }]] },
+    "Build case record": { "main": [[{ "node": "Serialize record", "type": "main", "index": 0 }]] },
+    "Serialize record": { "main": [[{ "node": "Write to eval/inbox", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "active": false
+}

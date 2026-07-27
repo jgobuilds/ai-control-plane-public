@@ -1,0 +1,251 @@
+{
+  "id": "brightworks-notify",
+  "name": "Notify (channel-abstracted)",
+  "meta": {
+    "description": "Reusable notifier. Call via Execute Workflow with { severity, title, message, source }. Routes to Slack / Teams / Email / generic webhook based on the NOTIFY_CHANNEL env var, so callers never hardcode a channel."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "severity",
+              "type": "string"
+            },
+            {
+              "name": "title",
+              "type": "string"
+            },
+            {
+              "name": "message",
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "action",
+              "type": "string"
+            },
+            {
+              "name": "metric",
+              "type": "string"
+            },
+            {
+              "name": "runUrl",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "aaaaaaaa-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Assemble the payload once, here, in the shape the contract requires\n// (ai-standards/references/notification-taxonomy.md — \"The message contract\").\n// Downstream branches only reshape it to each platform's wire format.\n//\n// BLUF: title states the OUTCOME, then the action line, then the one number,\n// then supporting detail, then provenance small and last. The reader is scanning\n// a phone and deciding in ~2s whether this needs them.\nconst i = $input.first().json || {};\nconst NL = String.fromCharCode(10);\n\nconst severity = (i.severity || 'info').toLowerCase();\nconst title = (i.title || 'Notification').trim();\nconst detail = (i.message || '').trim();\nconst source = i.source || 'n8n';\nconst metric = (i.metric || '').trim();\n\n// Severity is DEFINED, not felt — same three words everywhere, or the colours\n// stop meaning anything. Each maps to exactly one reader obligation.\nconst OBLIGATION = { error: 'Act now', warn: 'Decide this week', info: 'No action' };\n// A caller may state the action explicitly (\"Act by 2026-08-24\"); otherwise it is\n// derived, so a lane that forgets still emits a contract-shaped message rather\n// than leaving the reader to infer urgency from tone.\nconst action = (i.action || '').trim() || OBLIGATION[severity] || 'No action';\nconst emoji = severity === 'error' ? '\\uD83D\\uDD34'\n            : severity === 'warn'  ? '\\uD83D\\uDFE1'\n            : '\\uD83D\\uDFE2';\n\n// Detail lives behind a link — but assume the link is never opened. Most of our\n// detail surfaces are localhost-bound and unreachable from the phone the alert\n// was read on, so the MESSAGE must carry the decision and the link only carries\n// the evidence.\nconst base = ($env.N8N_BASE_URL || 'http://localhost:5678').replace(/\\/+$/, '');\nconst runUrl = i.runUrl || (base + '/home/executions');\nconst runLabel = i.runUrl ? 'View run' : 'Open executions';\n\n// Slack hard limits: header plain_text 150, section text 3000. Truncate loudly\n// rather than letting Slack reject the whole message.\nconst clip = (s, n) => (s.length > n ? s.slice(0, n - 20) + NL + '… (truncated)' : s);\n\nconst blocks = [\n  { type: 'header',\n    text: { type: 'plain_text', text: clip(`${emoji} ${title}`, 150), emoji: true } },\n  { type: 'section',\n    text: { type: 'mrkdwn', text: `*${action}*` } },\n];\n\nif (metric) {\n  blocks.push({ type: 'section', fields: [\n    { type: 'mrkdwn', text: `*Key figure*${NL}${clip(metric, 600)}` },\n    { type: 'mrkdwn', text: `*Severity*${NL}\\`${severity}\\`` },\n  ] });\n}\nif (detail) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: clip(detail, 2800) } });\n}\n// Provenance last and small. Naming the lane is what lets a noisy alert be\n// traced to a workflow and fixed rather than muted.\nblocks.push({ type: 'context', elements: [\n  { type: 'mrkdwn', text: `lane: \\`${source}\\`  ·  <${runUrl}|${runLabel}>` } ]});\n\n// Fallback text: what a phone notification shows, and what Teams/webhook use.\n// It carries the decision on its own — title plus action, nothing else.\nconst text = `${emoji} ${title} — ${action}`;\n// Long form for channels without Block Kit.\nconst longText = [`${emoji} *${title}* (${severity})`, `*${action}*`,\n                  metric, detail, `_lane: ${source} · ${runUrl}_`]\n                 .filter(Boolean).join(NL);\n\nreturn [{ json: { severity, title, message: detail, source, action, metric,\n                  runUrl, text, longText, blocks } }];"
+      },
+      "id": "aaaaaaaa-0000-0000-0000-000000000002",
+      "name": "Format message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $env.NOTIFY_CHANNEL }}",
+                    "rightValue": "slack",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "slack"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $env.NOTIFY_CHANNEL }}",
+                    "rightValue": "teams",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "teams"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $env.NOTIFY_CHANNEL }}",
+                    "rightValue": "webhook",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "webhook"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "aaaaaaaa-0000-0000-0000-000000000003",
+      "name": "Route by NOTIFY_CHANNEL",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text, blocks: $json.blocks }) }}",
+        "options": {}
+      },
+      "id": "aaaaaaaa-0000-0000-0000-000000000004",
+      "name": "Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TEAMS_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"type\": \"message\", \"attachments\": [ { \"contentType\": \"application/vnd.microsoft.card.adaptive\", \"content\": { \"type\": \"AdaptiveCard\", \"version\": \"1.4\", \"body\": [ { \"type\": \"TextBlock\", \"weight\": \"Bolder\", \"text\": $json.title }, { \"type\": \"TextBlock\", \"wrap\": true, \"text\": $json.message }, { \"type\": \"TextBlock\", \"isSubtle\": true, \"spacing\": \"None\", \"text\": ('severity: ' + $json.severity + ' \\u00b7 source: ' + $json.source) } ] } } ] } }}",
+        "options": {}
+      },
+      "id": "aaaaaaaa-0000-0000-0000-000000000005",
+      "name": "Teams",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"severity\": $json.severity, \"title\": $json.title, \"message\": $json.message, \"source\": $json.source } }}",
+        "options": {}
+      },
+      "id": "aaaaaaaa-0000-0000-0000-000000000006",
+      "name": "Generic webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "When called": {
+      "main": [
+        [
+          {
+            "node": "Format message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format message": {
+      "main": [
+        [
+          {
+            "node": "Route by NOTIFY_CHANNEL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by NOTIFY_CHANNEL": {
+      "main": [
+        [
+          {
+            "node": "Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teams",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generic webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generic webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "active": false
+}

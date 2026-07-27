@@ -1,0 +1,238 @@
+{
+  "id": "brightworks-ask-question",
+  "name": "Ask a human (agent question gate)",
+  "settings": {
+    "errorWorkflow": "brightworks-error-trigger"
+  },
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "question",
+              "type": "string"
+            },
+            {
+              "name": "context",
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "timeoutHours",
+              "type": "number"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build",
+      "name": "Build question",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Build the human-facing question. The resume URL belongs to THIS execution:\n// opening it renders an n8n form, and submitting it resumes the Wait node below\n// with the typed answer.\n//\n// Written to the message contract (notification-taxonomy.md): the TITLE states\n// what is blocked, the ACTION line says what the reader must do, and the detail\n// follows. A question that buries the ask under context gets skimmed past.\nconst i = $input.first().json || {};\nconst NL = String.fromCharCode(10);\n// resumeFormUrl, NOT resumeUrl. With resume:\"form\" the form is served at\n// /form-waiting/<id> while $execution.resumeUrl points at /webhook-waiting/<id>.\n// The wrong one does not merely 404 — hitting the webhook URL RESUMES the wait\n// with no submitted data, so a human who clicked it would unblock the agent\n// while answering nothing. Verified against a live waiting execution.\nconst url = $execution.resumeFormUrl;\nconst q = (i.question || '').trim();\n\nif (!q) {\n  // An empty question would render a form asking nothing, and a human would\n  // answer it with nothing. Fail loudly at the seam instead.\n  throw new Error('ask-question called with no `question` — refusing to ask a human nothing.');\n}\n\nconst hours = Number(i.timeoutHours) > 0 ? Number(i.timeoutHours) : 24;\n\nreturn [{ json: {\n  severity: 'warn',\n  title: `Agent is blocked: ${q.slice(0, 90)}`,\n  action: `Answer to unblock — ${url}`,\n  metric: `waiting up to ${hours}h`,\n  message: [\n    i.context ? `Context: ${i.context}` : '',\n    '',\n    `Open to answer: ${url}`,\n    '',\n    `_No answer within ${hours}h returns \"unanswered\" to the agent — NOT an` +\n    ` empty answer, and NOT approval of anything._`,\n  ].filter(Boolean).join(NL),\n  source: i.source || 'ask-question',\n  runUrl: url,\n  _question: q,\n  _hours: hours,\n} }];"
+      }
+    },
+    {
+      "id": "notify",
+      "name": "Notify humans",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "brightworks-notify",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "action",
+              "displayName": "action",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "metric",
+              "displayName": "metric",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "runUrl",
+              "displayName": "runUrl",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "wait",
+      "name": "Wait for answer",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        890,
+        300
+      ],
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Answer the agent",
+        "formDescription": "The agent has paused and needs this to continue. If you do not know, say so — a wrong answer is worse than no answer.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Answer",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 24,
+        "resumeUnit": "hours",
+        "options": {}
+      }
+    },
+    {
+      "id": "answer",
+      "name": "Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Resumed either by a submitted form or by the timeout.\n//\n// THE DISTINCTION THAT MATTERS: \"nobody answered\" and \"answered with nothing\"\n// must never collapse into the same value. A caller that cannot tell them apart\n// will treat silence as an empty-but-valid fact and carry on — which is exactly\n// the guessing this control exists to stop. So `answered` is a separate boolean\n// from `answer`, and a timeout sets answered=false.\nconst j = $input.first().json || {};\n\n// n8n form resumes put submitted fields at the top level, keyed by field label.\n// Accept a couple of shapes rather than assuming one, and say so if none match.\nconst raw = (typeof j.Answer === 'string') ? j.Answer\n          : (typeof j.answer === 'string') ? j.answer\n          : (j.data && typeof j.data.Answer === 'string') ? j.data.Answer\n          : null;\n\nconst answer = (raw || '').trim();\nconst answered = raw !== null && answer.length > 0;\n\nreturn [{ json: {\n  answered,\n  answer,\n  timedOut: raw === null,\n  // Present so a caller can log WHY it proceeded without an answer rather than\n  // silently defaulting.\n  // Name the FIELDS WE SAW when nothing parsed. Without this the failure reads\n  // as \"the human submitted nothing\" when the real cause may be a field-name\n  // mismatch — two very different problems that looked identical, and cost real\n  // debugging time. Keys only, never values: this string reaches a channel.\n  note: answered ? 'human answered'\n      : (raw === null ? 'no response before the timeout — treat as UNKNOWN, not as empty'\n                      : 'form returned no usable answer — treat as UNKNOWN. fields seen: ' +\n                        (Object.keys(j).join(', ') || '(none)')),\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "When called": {
+      "main": [
+        [
+          {
+            "node": "Build question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build question": {
+      "main": [
+        [
+          {
+            "node": "Notify humans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify humans": {
+      "main": [
+        [
+          {
+            "node": "Wait for answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for answer": {
+      "main": [
+        [
+          {
+            "node": "Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "description": "The question gate: pages a human, serves a form, and blocks until they answer or the timeout expires. Returns `answered` separately from `answer`, so \"nobody replied\" can never be mistaken for an empty answer."
+  }
+}

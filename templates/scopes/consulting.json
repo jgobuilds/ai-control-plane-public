@@ -1,0 +1,25 @@
+{
+  "_comment": "CONSULTING template — a firm with siloed clients behind ethical walls. Each client is isolation:silo + gets a dedicated runner (runnerHost); competing clients are listed in conflicts.pairs so the router/generator refuse to co-locate them. Add one node per client; keep an internal branch for firm work. Applied by scripts/install.py --scope-template consulting.",
+  "levels": ["enterprise", "department", "team", "personal"],
+  "workspaceRoot": "scopes",
+  "defaultScope": "enterprise",
+  "levelDefaults": {
+    "enterprise": { "pii": "block", "isolation": "pool", "promotion": "review", "identityGroup": "agents-all@example.com", "retentionDays": null },
+    "department": { "pii": "block", "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": null },
+    "team":       { "pii": "warn",  "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": null },
+    "personal":   { "pii": "warn",  "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": 90 }
+  },
+  "nodes": {
+    "enterprise":  { "level": "enterprise", "parent": null },
+
+    "consulting":  { "level": "department", "parent": "enterprise", "identityGroup": "agents-consulting@example.com" },
+    "client-a":    { "level": "team", "parent": "consulting", "controls": { "pii": "block", "isolation": "silo", "mode": "ai-led" }, "runnerHost": "claude-runner-client-a" },
+    "client-b":    { "level": "team", "parent": "consulting", "controls": { "pii": "block", "isolation": "silo" }, "runnerHost": "claude-runner-client-b" },
+
+    "internal":    { "level": "department", "parent": "enterprise" }
+  },
+  "conflicts": {
+    "_comment": "Ethical walls — competing clients that must NEVER share a runner.",
+    "pairs": [["client-a", "client-b"]]
+  }
+}

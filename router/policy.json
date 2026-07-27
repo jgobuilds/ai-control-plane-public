@@ -1,0 +1,110 @@
+{
+  "_comment": "Cost-tiering policy. Edit THIS file to change routing — not the code. Model IDs are examples; set to what you actually run. Tiers ascend in cost/capability; the router always picks the LOWEST tier a task needs.",
+
+  "tiers": {
+    "t0": { "kind": "deterministic", "note": "no LLM — rules/regex/lookup/template" },
+    "t1": { "kind": "model", "provider": "gemini", "model": "gemini-2.5-flash-lite", "note": "small/cheap: classify, extract, route, simple transforms" },
+    "t2": { "kind": "model", "provider": "claude", "model": "claude-sonnet-5", "note": "standard: generate, summarize, code edits" },
+    "t3": { "kind": "model", "provider": "claude", "model": "claude-fable-5", "note": "frontier: planning, architecture, complex tests, hard review" }
+  },
+
+  "taskTypes": {
+    "classify":    { "tier": "t1" },
+    "extract":     { "tier": "t1" },
+    "transform":   { "tier": "t1" },
+    "route":       { "tier": "t1" },
+    "summarize":   { "tier": "t2" },
+    "generate":    { "tier": "t2" },
+    "code-edit":   { "tier": "t2" },
+    "debug":       { "tier": "t2" },
+    "plan":        { "tier": "t3" },
+    "architect":   { "tier": "t3" },
+    "test-design": { "tier": "t3" },
+    "review":      { "tier": "t3", "verify": "cross" }
+  },
+
+  "verifyOnTiers": ["t3"],
+
+  "limits": {
+    "_comment": "Budget/rate circuit breaker — the kill switch's automatic twin. router/killswitch.js counts decisions in the audit ledger within a sliding window (windowMinutes) and refuses new requests once a ceiling is met — blocked:\"circuit-open\" — halting a runaway loop or cost blowout with no human at the console. Set a ceiling to null (or omit it) to disable that dimension; set windowMinutes<=0 to disable the breaker entirely.",
+    "windowMinutes": 10,
+    "maxRequestsPerScope": 60,
+    "maxRequestsGlobal": 200,
+    "_spend_note": "NOTIONAL cost ceilings (USD) over the same sliding window. Subscription-billed runners do not spend this money — it is the comparable yardstick across tiers, and the ceiling a request COUNT cannot express (a t3 xhigh run costs orders of magnitude more than a t1 classify). Set null to disable. See AIOPS.md.",
+    "maxNotionalSpendPerScope": 5.0,
+    "maxNotionalSpendGlobal": 20.0
+  },
+
+  "defaults": {
+    "unknownTaskType": "triage",
+    "triageTier": "t1",
+    "fallbackTier": "t2"
+  },
+
+  "controls": {
+    "maxTier": "t3",
+    "_maxTier_note": "Hard ceiling. Set to 't2' to forbid frontier spend for a lane unless a request explicitly passes allowFrontier:true.",
+    "allowRequestOverride": true,
+    "_override_note": "If false, requests cannot force provider/model/tier — policy is absolute."
+  },
+
+  "risk": {
+    "_comment": "Agent risk = data-sensitivity x access(blast radius) x autonomy (NIST AI RMF / Databricks DASF consensus). Each request scores 1-3 per dimension; the derived level drives PROPORTIONAL controls. Dimensions come from the scope (data) and the request's `action`/`trigger` fields.",
+    "data":     { "block": 3, "silo": 3, "warn": 2, "off": 1, "none": 1, "default": 2 },
+    "access":   { "advise": 1, "read": 1, "write": 2, "ingest": 2, "apply": 3, "send": 3, "execute": 3, "default": 1 },
+    "autonomy": { "turn": 1, "scheduled": 2, "proactive": 3, "default": 1 },
+    "levels": ["low", "medium", "high", "critical"],
+    "controlsByDimension": {
+      "_comment": "Thresholds that switch each control on. requireApproval: a human must approve before the runner acts. requireVerify: force a fresh-context check. requireIsolation: confidential data must run in a siloed/dedicated runner. blockCrossVendor: don't send confidential work to a 2nd vendor (addresses M4).",
+      "requireVerify":     { "access": 2, "autonomy": 2 },
+      "requireApproval":   { "access": 3, "autonomy": 3 },
+      "requireIsolation":  { "data": 3 },
+      "blockCrossVendor":  { "data": 3 }
+    },
+    "enforce": {
+      "requireIsolation": "warn",
+      "_isolation_note": "warn|block. Keep 'warn' until the C1/C2 per-scope runners are cut over (phase 5); then set 'block'."
+    }
+  },
+
+  "guardrails": {
+    "_comment": "Prompt-injection & output guardrails (threat-model H3). router/guardrails.js is a HEURISTIC layer (not a guarantee) — the structural mitigation is C1 per-scope mounts + per-scope allowedTools. input: off|warn|block — 'warn' attaches inputScan findings to the decision and proceeds; 'block' refuses the request (blocked:'guardrail-input') when a finding meets minLevelToBlock. output: off|warn — 'warn' runs outputScan on the runner result and attaches decision.outputFindings. minLevelToBlock: low|medium|high — the lowest finding severity that blocks under input:'block'. Only finding TYPES reach the audit ledger, never the matched text. See GUARDRAILS.md.",
+    "input": "warn",
+    "output": "warn",
+    "minLevelToBlock": "medium",
+    "backend": "heuristic",
+    "_backend_note": "heuristic (default; built-in regex, no network) | lakera | bedrock. When set to an ML backend, backendUrl must point at the detector; findings merge with the heuristic and fall back to it on any error. See DETECTION-BACKENDS.md.",
+    "backendUrl": ""
+  },
+
+  "modes": {
+    "_comment": "Operating mode = who LEADS and who SUPPORTS. Orthogonal to risk (which sets control INTENSITY); mode sets the human/AI relationship. Framing follows Sol Rashidi's Executive AI Compass (c) 2025 (AI-only / AI-led+human-supported / human-led+AI-supported / human-only), mapped here onto enforceable controls. Set `mode` per scope (a deliberate per-function choice); a request may only make it MORE restrictive, never less. maxAction caps what the agent may DO; humanValidation: none | output (human validates the agent's output before it's authoritative — 'support' as substantive review) | actor (the human performs the action; the agent only assists).",
+    "order": ["ai-only", "ai-led", "human-led", "human-only"],
+    "default": "human-led",
+    "map": {
+      "ai-only":    { "maxAction": "execute", "humanValidation": "none" },
+      "ai-led":     { "maxAction": "execute", "humanValidation": "output" },
+      "human-led":  { "maxAction": "write",   "humanValidation": "actor" },
+      "human-only": { "maxAction": "advise",  "humanValidation": "actor" }
+    }
+  },
+
+  "approvers": {
+    "_comment": "Approver RBAC + segregation of duties (threat-model M5). When a request arrives with approved:true, router/rbac.js checks the NAMED approver: their identityGroup must be authorized to approve at the request's risk level (byRisk) and, if the scope is explicitly listed (byScope), for that scope too; and for the risk levels in segregationOfDuties.riskLevels the approver must differ from the requester. Groups map to Google Groups (see scopes.json `identityGroup`). Every risk level MUST map to >=1 group — rbac.js fails closed otherwise. Identity is captured at the approval ingress and passed to the router as `approver`+`approverGroups` (see RBAC.md / n8n approval-gate meta).",
+    "byRisk": {
+      "low":      ["agents-all@example.com"],
+      "medium":   ["agents-approvers@example.com"],
+      "high":     ["agents-approvers@example.com", "security-approvers@example.com"],
+      "critical": ["security-approvers@example.com"]
+    },
+    "byScope": {
+      "_comment": "Optional per-scope narrowing applied ON TOP of byRisk. If a scope is listed, the approver must ALSO belong to one of these groups (never a relaxation). Use for ethical-wall / confidential scopes.",
+      "client-a": ["agents-consulting@example.com", "security-approvers@example.com"],
+      "client-b": ["agents-consulting@example.com", "security-approvers@example.com"]
+    },
+    "segregationOfDuties": {
+      "_comment": "Risk levels at which the approver must be a different identity than the requester.",
+      "riskLevels": ["high", "critical"]
+    }
+  }
+}

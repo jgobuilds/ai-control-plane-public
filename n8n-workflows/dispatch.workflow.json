@@ -1,0 +1,278 @@
+{
+  "id": "brightworks-dispatch",
+  "name": "dispatch",
+  "meta": {
+    "description": "Work-dispatch lane (ADR 0012). Every 10 minutes it asks the `lanes` service to claim ONE ready ticket (GET lanes:8081/dispatch?assignee=…), then hands the resulting payload to the ROUTER. It never calls a runner: the router is the only path to one, and a second path is the open C2 threat-model finding. SINGLE WRITER — do not run a second copy of this lane against the same ticket store; that is what makes the claim safe without a lease (ADR 0010 N2). An empty queue is the normal state and ends the run quietly; a BLOCKED ticket (no acceptance criterion, or hop ceiling reached) notifies a human, because those need judgement rather than another agent. BACKEND: defaults to `file` because the lanes container has no `gh` binary and no GitHub credential — reaching GitHub Issues from here needs either gh in the image or a token plus an API transport, and putting a credential in this service is an exposure decision rather than a code change. Set TICKET_BACKEND=github once that is decided; the seam is why it is a one-word change. IF nodes use a boolean EXPRESSION rather than a typed operator: 'number'+'exists' fails strict validation on null, and null is this payload's normal 'nothing to dispatch' value — so the lane errored on its own healthy state."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "d1",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "d0",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://lanes:8081/dispatch?backend={{ $env.TICKET_BACKEND || 'file' }}&assignee={{ $env.DISPATCH_ASSIGNEE || 'dex-the-dispatcher' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lanes-token",
+              "value": "={{ $env.LANES_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d2",
+      "name": "Claim one ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        60,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c-dispatched",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.dispatched !== null && $json.dispatched !== undefined }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "d3",
+      "name": "Was anything claimed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://router:8080/route",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "authorization",
+              "value": "=Bearer {{ $env.ROUTER_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "id": "d4",
+      "name": "Hand off to the router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c-blocked",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.blocked !== null && $json.blocked !== undefined }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "d5",
+      "name": "Blocked, or just empty?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// A BLOCKED ticket needs a person, not a retry. Both blocking cases —\n// no acceptance criterion, and the hop ceiling — are judgement calls\n// that another agent cannot resolve, and retrying would spin forever.\nconst j = $input.first().json;\nreturn [{ json: {\n  severity: 'warn',\n  title: `Dispatch blocked on ticket #${j.blocked}`,\n  message: j.note,\n  source: 'dispatch',\n} }];"
+      },
+      "id": "d6",
+      "name": "Format blocked notice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "brightworks-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        }
+      },
+      "id": "d7",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        960,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Every 10 minutes": {
+      "main": [
+        [
+          {
+            "node": "Claim one ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Claim one ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim one ticket": {
+      "main": [
+        [
+          {
+            "node": "Was anything claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Was anything claimed?": {
+      "main": [
+        [
+          {
+            "node": "Hand off to the router",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked, or just empty?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocked, or just empty?": {
+      "main": [
+        [
+          {
+            "node": "Format blocked notice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Format blocked notice": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "brightworks-error-trigger"
+  },
+  "active": false
+}

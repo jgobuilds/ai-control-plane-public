@@ -1,0 +1,227 @@
+{
+  "id": "brightworks-dependency-bumps",
+  "name": "Dependency bumps (scheduled lane, AG-3)",
+  "meta": {
+    "description": "Weekly closed-loop maintenance lane: fans out dependency work into isolated worktrees, each self-verifying, then notifies with merge-ready branches. No approval gate before the run — nothing irreversible happens; the human gate IS the merge (branches never auto-merge). Set repo/base/verify in the Config node and the Notify workflow ID in the Notify node."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "id": "aeaeaeae-0000-0000-0000-000000000001",
+      "name": "Weekly (Mon 06:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The lane's work, as isolated fan-out tasks. Each gets its own worktree +\n// branch + self-verify; failed verifies are reported, not merged.\n// Tune verify commands to the repo (npm/pnpm/pip/cargo...).\nreturn [{ json: {\n  repo: 'repo',\n  base: 'main',\n  clean: true,   // re-runnable weekly: replaces last week's unmerged branches\n  tasks: [\n    { id: 'security-bumps',\n      prompt: 'Run a dependency audit and upgrade ONLY packages with known security advisories. Keep changes minimal (patch/minor where possible), update the lockfile, and note each CVE addressed in the commit-worthy summary.',\n      verify: 'npm audit --audit-level=high && npm test' },\n    { id: 'minor-bumps',\n      prompt: 'Upgrade dependencies to their latest MINOR/PATCH versions only — no major-version jumps. Update the lockfile. If an upgrade breaks tests, revert that single package and note it.',\n      verify: 'npm test' },\n    { id: 'stale-report',\n      prompt: 'Produce a report of remaining outdated MAJOR-version dependencies: package, current vs latest, changelog highlights, migration risk (low/med/high). Write it to UPGRADES.md. Do not upgrade anything.',\n      verify: 'test -f UPGRADES.md' }\n  ]\n} }];"
+      },
+      "id": "aeaeaeae-0000-0000-0000-000000000002",
+      "name": "Build lane tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://claude-runner:8080/fanout",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-runner-token",
+              "value": "change-me-to-a-long-random-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"repo\": $json.repo, \"base\": $json.base, \"clean\": $json.clean, \"tasks\": $json.tasks } }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "id": "aeaeaeae-0000-0000-0000-000000000003",
+      "name": "Fan out (worktrees)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst results = r.results || [];\nconst ready = results.filter(x => x.patchFile && x.verify?.passed);\nconst failed = results.filter(x => x.status === 'failed' || x.status === 'error');\nconst lines = results.map(x =>\n  `- ${x.id} [${x.status}]` +\n  (x.verify ? ` verify:${x.verify.passed ? 'PASS' : 'FAIL'}` : '') +\n  (x.diffStat ? ` (${x.diffStat.split('\\n').pop().trim()})` : ''));\nreturn [{ json: {\n  severity: failed.length ? 'warn' : 'info',\n  title: `Dependency lane: ${ready.length} branch(es) merge-ready, ${failed.length} need attention`,\n  message: `${r.review || ''}\\n\\n${lines.join('\\n')}\\n\\nMerge the green ones: git merge agent/<id> — merge stays a human act.`,\n  source: 'dependency-bumps'\n} }];"
+      },
+      "id": "aeaeaeae-0000-0000-0000-000000000004",
+      "name": "Summarize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "brightworks-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "aeaeaeae-0000-0000-0000-000000000005",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "id": "ondemand",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        460
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    }
+  ],
+  "connections": {
+    "Weekly (Mon 06:00)": {
+      "main": [
+        [
+          {
+            "node": "Build lane tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build lane tasks": {
+      "main": [
+        [
+          {
+            "node": "Fan out (worktrees)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan out (worktrees)": {
+      "main": [
+        [
+          {
+            "node": "Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Build lane tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "brightworks-error-trigger"
+  },
+  "active": false
+}

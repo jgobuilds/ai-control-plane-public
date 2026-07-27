@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "n8n": {
+      "command": "n8n-mcp",
+      "env": {
+        "MCP_MODE": "stdio",
+        "LOG_LEVEL": "error",
+        "DISABLE_CONSOLE_OUTPUT": "true",
+        "N8N_API_URL": "${N8N_API_URL}",
+        "N8N_API_KEY": "${N8N_API_KEY}"
+      }
+    },
+    "ask-human": {
+      "command": "node",
+      "args": [
+        "/app/ask-human-mcp.js"
+      ],
+      "env": {
+        "RUNNER_TOKEN": "${RUNNER_TOKEN}",
+        "ASK_HUMAN_URL": "${ASK_HUMAN_URL}"
+      }
+    }
+  }
+}

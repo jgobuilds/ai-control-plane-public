@@ -1,0 +1,73 @@
+{
+  "_comment": "Container image pinning policy. Every third-party image and Dockerfile base image is pinned to a DIGEST, not a tag — a tag is a moving target, so `:latest` means you cannot say what you are running until you look. Digests make the stack reproducible and make an upgrade a visible, reviewable diff. BUT: pinning WITHOUT an update process is worse than :latest, because you silently freeze on a vulnerable image. That is what reviewBy exists for — scripts/image_policy_check.py FAILS once the date passes, the same forcing-function pattern as context/model-policy.json. See ai-standards/references/dependency-security.md.",
+  "reviewBy": "2026-08-24",
+  "reviewCadence": "monthly",
+  "_reviewBy_note": "Monthly, not quarterly: the orchestration tier in this stack has a heavy critical-CVE record (n8n shipped multiple CVSS 9.4-10.0 RCEs in 2026). Re-resolve digests, read the changelogs, re-run the scan, then move this date.",
+  "pinnedAt": "2026-07-24",
+  "images": [
+    {
+      "ref": "n8nio/n8n",
+      "tag": "latest",
+      "version": "2.30.7",
+      "digest": "sha256:23a26975c21aa6f7113286668b35e2831ec898d3a7fbfa1ac8ff16f1bdf88c37",
+      "where": "docker-compose.yml (n8n service)",
+      "risk": "HIGHEST in the stack. Executes user-supplied workflow expressions by design, so arbitrary code execution IS the product and the attack surface is structural. 2026 CVEs incl. CVE-2026-21858 (CVSS 10.0 unauth RCE), CVE-2026-25049 (9.4 unauth RCE), CVE-2026-27495/27497 (9.4). Mitigated here by binding to 127.0.0.1 only and holding no repo mount.",
+      "verifiedNotVulnerable": "2.30.7 is past every published 2026 fix version (1.121.0 / 1.123.17 / 2.5.2 / 2.9.3 / 2.10.1). Checked 2026-07-24."
+    },
+    {
+      "ref": "ghcr.io/kenn-io/agentsview",
+      "tag": "latest",
+      "digest": "sha256:2abee0be1ffa4602b277383ce8703a26056bcfaa953451428ca588e50c52e79b",
+      "where": "docker-compose.yml (agentsview service)",
+      "risk": "Host-exposed on 127.0.0.1:8090. Third-party, smaller project — least visibility into its security process of anything here. Treat as untrusted; it holds no secret and mounts nothing."
+    },
+    {
+      "ref": "python",
+      "tag": "3.12-alpine",
+      "digest": "sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df",
+      "where": "lanes/Dockerfile",
+      "risk": "Low. stdlib only — no pip install, so no third-party dependency surface at all. Runs non-root with read-only mounts."
+    },
+    {
+      "ref": "node",
+      "tag": "22-bookworm-slim",
+      "digest": "sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3",
+      "where": "router/, scrubber/, claude-runner/, gemini-runner/ Dockerfiles",
+      "risk": "Router and scrubber are the privileged path — the router writes the audit ledger, the scrubber is the only holder of the PII vault. npm dependency surface is the supply-chain exposure here; see the lockfile rules in the lens."
+    },
+    {
+      "ref": "golang",
+      "tag": "1.26-bookworm",
+      "digest": "sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+      "where": "capability-factory/Dockerfile.builder",
+      "risk": "Deliberately NOT firewalled (the research phase sniffs arbitrary APIs) and profile-gated off by default. Highest-privilege lane when running — start it explicitly and supervise it."
+    },
+    {
+      "ref": "aquasec/trivy",
+      "tag": "latest",
+      "version": "0.72.0",
+      "digest": "sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f",
+      "where": ".github/workflows/security-scan.yml",
+      "risk": "CI-only, never in the runtime stack. Pinned deliberately rather than using the marketplace trivy-action: a third-party GitHub Action runs arbitrary code with repo context inside a security-critical pipeline. Safe to pin — Trivy fetches its vulnerability DB at run time, so a pinned binary still sees fresh CVEs; only the scanner engine is frozen."
+    }
+  ],
+  "notPinned": [
+    {
+      "ref": "ai-control-plane-lanes / -router / -scrubber / -*-runner",
+      "why": "Built locally from this repo. Their reproducibility comes from the pinned FROM digests above plus the committed source, so a tag is sufficient."
+    }
+  ],
+  "_pendingBumps_note": "Version drift FOUND BY scripts/research_watch.py and deliberately deferred to the next review rather than bumped on the spot. Recorded so the deferral is a decision with a date, not a thing someone forgot. image_policy_check.py prints these on every run, so the queue cannot be missed while reading the policy it belongs to.",
+  "pendingBumps": [
+    {
+      "ref": "n8nio/n8n",
+      "from": "2.30.7",
+      "to": "2.32.5",
+      "noticedOn": "2026-07-25",
+      "noticedBy": "scripts/research_watch.py (research-watch lane)",
+      "scheduledFor": "2026-08-24",
+      "why": "Two minor versions behind on the highest-risk component in the stack. The watch attached NO security or deprecation signal to 2.31-2.32, so this is routine currency, not an incident — fold it into the scheduled re-pin. If a security signal lands on n8n before then, this stops being routine and the re-pin happens immediately.",
+      "action": "Re-resolve the digest, read 2.31/2.32 changelogs, re-run Trivy, move reviewBy."
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "generatedFrom": "scopes.json",
+  "scopeToHost": {
+    "enterprise": "claude-runner-enterprise",
+    "consulting": "claude-runner-consulting",
+    "client-a": "claude-runner-client-a",
+    "client-b": "claude-runner-client-b",
+    "engineering": "claude-runner-engineering",
+    "data-team": "claude-runner-engineering",
+    "jane": "claude-runner-engineering"
+  },
+  "roots": [
+    "enterprise",
+    "consulting",
+    "client-a",
+    "client-b",
+    "engineering"
+  ],
+  "hosts": [
+    "claude-runner-client-a",
+    "claude-runner-client-b",
+    "claude-runner-consulting",
+    "claude-runner-engineering",
+    "claude-runner-enterprise"
+  ]
+}

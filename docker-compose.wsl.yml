@@ -1,0 +1,18 @@
+# WSL2 dev overlay.
+#
+# When running on native Docker Engine inside WSL2 (instead of Docker Desktop),
+# Windows `localhost` does not reach ports the base file publishes on
+# `127.0.0.1` *inside* the WSL VM — WSL2's forwarding doesn't relay loopback-only
+# binds. This overlay republishes the two UI ports on all interfaces so Windows
+# `localhost:5678` / `:8090` work. Still host-only in practice: the WSL2 VM is
+# NAT'd behind Windows, not exposed to the LAN. (`!override` replaces the base
+# `ports:` rather than appending, avoiding a double-bind conflict.)
+#
+# Use:  docker compose -f docker-compose.yml -f docker-compose.wsl.yml up -d
+services:
+  n8n:
+    ports: !override
+      - "5678:5678"
+  agentsview:
+    ports: !override
+      - "8090:8080"

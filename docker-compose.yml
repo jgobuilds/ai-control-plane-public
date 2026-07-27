@@ -1,0 +1,298 @@
+# Project name pinned EXPLICITLY. Without this, Compose derives it from the
+# FOLDER, so renaming the directory silently creates new empty volumes and
+# orphans the n8n database and CLI auth. Learned the hard way — see the
+# rename runbook in docs/.
+name: ai-control-plane
+
+services:
+  # Locked-down sidecar: runs the Claude Code CLI on your SUBSCRIPTION auth,
+  # exposed only on the internal docker network (no host port published).
+  claude-runner:
+    build: ./claude-runner
+    container_name: claude-runner
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN                 # required so init-firewall.sh can set iptables
+    environment:
+      - RUNNER_TOKEN=${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}  # required; fail-closed
+      - FIREWALL=on                    # set to "off" to disable egress allowlist
+      # Claude subscription auth: a long-lived token from `claude setup-token`
+      # (headless-friendly; avoids the in-container OAuth-callback trap). Kept in
+      # gitignored .env, never committed. Leave blank to fall back to a mounted
+      # ~/.claude login in the claude-config volume.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - DEFAULT_MAX_TURNS=${DEFAULT_MAX_TURNS:-40}
+      - FANOUT_CONCURRENCY=${FANOUT_CONCURRENCY:-4}   # parallel worktree agents
+      # Optional: enable n8n-mcp's create/update/execute tools. Leave blank to
+      # run in docs+validation-only mode (still fixes config hallucination).
+      - N8N_API_URL=${N8N_API_URL:-}
+      - N8N_API_KEY=${N8N_API_KEY:-}
+      # ask-human: where the agent raises a question mid-run. Reaches n8n
+      # over tcp/5678 on the docker network — a hole init-firewall.sh
+      # already opens for n8n-mcp, so this needed no new egress.
+      - ASK_HUMAN_URL=${ASK_HUMAN_URL:-http://n8n:5678/webhook/ask-human}
+    volumes:
+      - claude-config:/home/node/.claude   # persists your `claude login` token
+      - ./workspace:/workspace             # CLAUDE.md + workflow JSON exports (Git this)
+      - ./generated:/generated:ro          # MCPs/CLIs built by the capability factory
+    networks:
+      - agentnet
+    # NOTE: intentionally NO `ports:` — nothing on this container is reachable
+    # from the host or the internet, only from other containers on agentnet.
+
+  # Second agent, same contract. Provider-flagged (gemini today; swap the build
+  # args to Antigravity or another headless CLI). Rides Gemini's Google-login
+  # free tier — same "no API rate" theme as the Claude subscription.
+  gemini-runner:
+    build:
+      context: ./gemini-runner
+      # To swap providers, override these (and the login step in the README):
+      # args: { AGENT_NPM: "<npm-pkg>", AGENT_BIN: "<binary>" }
+    container_name: gemini-runner
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - RUNNER_TOKEN=${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}
+      - FIREWALL=on
+      - PROVIDER=gemini
+      # Gemini auth, same pattern as CLAUDE_CODE_OAUTH_TOKEN: a free-tier AI
+      # Studio key (aistudio.google.com/apikey) in gitignored .env. Headless —
+      # avoids the in-container OAuth-callback trap — and stays on the free tier
+      # rather than metered billing. The CLI reads it from the env it inherits;
+      # generativelanguage.googleapis.com is already in the egress allowlist.
+      # Leave blank to fall back to a mounted Google login in gemini-config.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Provider-flag knobs (one-line swap to Antigravity, etc.):
+      - AGENT_BIN=${AGENT_BIN:-gemini}
+      - PROMPT_FLAG=${PROMPT_FLAG:--p}
+      - EXTRA_ARGS=${GEMINI_EXTRA_ARGS:---yolo --output-format json}
+    volumes:
+      - gemini-config:/home/node/.gemini   # persists the Gemini/Google login
+      - ./workspace:/workspace
+    networks:
+      - agentnet
+
+  # Cost-tiering router: the single policy-enforcing entry point. n8n calls this,
+  # not the runners directly. Deterministic-first, cheapest-capable model, hard
+  # maxTier ceiling, optional cross-provider verify. Internal only.
+  router:
+    build: ./router
+    container_name: router
+    restart: unless-stopped
+    # Defence in depth: already non-root, and needs no Linux capabilities.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - RUNNER_TOKEN=${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}   # to call the runners
+      - ROUTER_TOKEN=${ROUTER_TOKEN:?set a DISTINCT ROUTER_TOKEN in .env}  # n8n -> router
+      - CONTROL_DIR=/control                                     # kill switch state dir (control/halt.json)
+    volumes:
+      - ./context:/app/context:ro                    # scope registry (scopes.json)
+      - ./audit:/audit                               # tamper-evident decision ledger
+      - ./control:/control                           # kill switch + circuit-breaker state (halt.json)
+    networks:
+      - agentnet
+    depends_on:
+      - claude-runner
+      - gemini-runner
+
+  # PII scrubber + ingest gateway. Drive content enters the workspace ONLY
+  # through this container. /vault (token maps) is mounted here and NOWHERE
+  # else — runners see tokens, never values. Internal network only; no egress.
+  scrubber:
+    build: ./scrubber
+    container_name: scrubber
+    restart: unless-stopped
+    # HARDENING — this service holds the PII token vault, so it is the worst place
+    # in the stack to run privileged. It cannot be made non-root here: the bind
+    # mounts live on a Windows drive exposed to WSL via 9p/drvfs with uid=0;gid=0
+    # synthesized and no metadata option, so everything reads as root:root and
+    # `chown` is silently a no-op. USER node would leave it unable to write the
+    # vault. (Verified 2026-07-25, not assumed.)
+    #
+    # So instead of pretending the uid can change, take away what root can DO:
+    # drop every Linux capability and forbid privilege escalation. It is a plain
+    # HTTP service that reads and writes mounted files — it needs none of them.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - SCRUBBER_TOKEN=${SCRUBBER_TOKEN:?set a DISTINCT SCRUBBER_TOKEN in .env}
+    volumes:
+      - ./workspace:/workspace
+      - ./vault:/vault                # PII token maps — NEVER mount into a runner
+      - ./context:/app/context:ro     # scope registry
+    networks:
+      - agentnet
+
+  # Python lane-runner. n8n's image is hardened with no package manager and no
+  # python (docs/decisions/0006), so n8n DRIVES the python lanes over HTTP instead
+  # of shelling out to them: schedule, execution log, IF gate and Notify all stay
+  # in n8n. Internal to agentnet — deliberately NO published host port.
+  lanes:
+    build:
+      context: ./lanes
+    image: ai-control-plane-lanes:latest
+    container_name: lanes
+    restart: unless-stopped
+    # Defence in depth: already non-root, and needs no Linux capabilities.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - LANES_TOKEN=${LANES_TOKEN:-}          # fail-closed: unset => refuses to start
+      - ALLOW_NO_AUTH=${ALLOW_NO_AUTH:-}
+      # Answering an agent's question IN SLACK. A bot token is required and the
+      # notification webhook cannot substitute: it is send-only and does not
+      # return a message ts, so there is no thread to watch. Unset simply means
+      # the n8n form stays the only answer path — Slack is an enhancement, and
+      # its absence must never break the primary one.
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID:-}
+      # To hand the answer back through the chokepoint rather than straight to a
+      # runner — same reason n8n does.
+      - ROUTER_URL=${ROUTER_URL:-http://router:8080}
+      - ROUTER_TOKEN=${ROUTER_TOKEN:?set a DISTINCT ROUTER_TOKEN in .env}
+    volumes:
+      # Read-only, and deliberately narrow — only what a lane actually needs, so
+      # .env and the rest of the repo stay out of this container entirely.
+      #
+      # The PII token vault is DELIBERATELY NOT mounted here. "The vault never
+      # leaves the scrubber" is a property worth keeping, so the retention lane
+      # reports on files only and states plainly that vault pruning was not
+      # inspected — an honest partial, never mistaken for "nothing to prune".
+      - ./scripts:/app/scripts:ro
+      - ./audit:/audit:ro
+      - ./context:/app/context:ro
+      - ./workspace:/app/workspace:ro
+    networks:
+      - agentnet
+
+  n8n:
+    # NOTE: n8nio/n8n is a Docker Hardened Image (Alpine, package manager REMOVED)
+    # and ships no python. The scheduled Python lanes therefore run in the `lanes`
+    # service above and are driven by n8n over HTTP. See docs/decisions/0006.
+    image: n8nio/n8n@sha256:23a26975c21aa6f7113286668b35e2831ec898d3a7fbfa1ac8ff16f1bdf88c37  # n8nio/n8n:latest (2.30.7) — pinned 2026-07-24, see context/image-policy.json
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      # Bound to localhost ONLY — not reachable from the LAN. Put SSO/IAP or a
+      # reverse proxy in front for remote access (see GSUITE-GCP.md).
+      - "127.0.0.1:5678:5678"     # n8n UI at http://localhost:5678
+      - "[::1]:5678:5678"         # see the agentsview note: localhost is ::1 first
+    environment:
+      - N8N_SECURE_COOKIE=false
+      - GENERIC_TIMEZONE=America/New_York
+      # SECURITY: complete n8n owner-account setup on first launch (user
+      # management) — a localhost bind stops the LAN, not a local user. The auth
+      # tokens are NOT here (they live in workflow node params); only notify
+      # webhook URLs below, which env-access-in-node can read. Treat as secrets.
+      # Allow $env access in expressions so the Notify sub-workflow can read the
+      # channel selection and webhook URLs below.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # --- Notification seam: pick ONE channel, set its URL. See n8n-workflows/. ---
+      - NOTIFY_CHANNEL=${NOTIFY_CHANNEL:-webhook}   # slack | teams | webhook
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - NOTIFY_WEBHOOK_URL=${NOTIFY_WEBHOOK_URL:-}
+      # Read by the drive-sync / deliverables Code nodes via $env (env access in
+      # nodes is enabled above). Empty until set — those lanes throw rather than
+      # query a bogus folder id.
+      - DRIVE_FOLDER_ID=${DRIVE_FOLDER_ID:-}
+      - LANES_TOKEN=${LANES_TOKEN:-}
+      # Base URL used to deep-link an alert to its own execution. Detail
+      # belongs behind a link, not pasted into the channel. Default is
+      # localhost, which is NOT reachable from a phone — hence the rule
+      # that the message must carry the decision and the link only the
+      # evidence (notification-taxonomy.md).
+      - N8N_BASE_URL=${N8N_BASE_URL:-http://127.0.0.1:5678}
+      # Lets a workflow call the ROUTER (http://router:8080/route) — the seam
+      # where a lane hands work to an agent. Without it every n8n->router call
+      # fails 401, which is exactly what happened: the token reached `lanes` but
+      # was never passed to `n8n`, so no workflow could route to an agent at all.
+      # Only surfaced by running a lane end to end. Deployed is not run.
+      - ROUTER_TOKEN=${ROUTER_TOKEN:?set a DISTINCT ROUTER_TOKEN in .env}
+      # Authenticates the runner's ask-human webhook. The runner already
+      # holds this token, so reusing it adds no new secret; n8n needs it to
+      # verify the caller. That endpoint can block a run and page a human,
+      # so it must not be open to anything that reaches the docker network.
+      - RUNNER_TOKEN=${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks:
+      - agentnet
+    depends_on:
+      - claude-runner
+      - router
+      - lanes
+
+  # Capability factory (PRIVILEGED LANE — on-demand only, not started by default).
+  # Runs cli-printing-press to generate new CLIs + MCP servers when the runner
+  # lacks an integration. Deliberately NOT firewalled: the research phase sniffs
+  # arbitrary APIs/sites. Start it explicitly and supervise it:
+  #   docker compose --profile builder run --rm claude-builder
+  # Output lands in ./generated, which the runner mounts read-only.
+  claude-builder:
+    build:
+      context: ./capability-factory
+      dockerfile: Dockerfile.builder
+    container_name: claude-builder
+    profiles: ["builder"]        # excluded from `docker compose up` unless requested
+    stdin_open: true
+    tty: true
+    volumes:
+      - claude-config:/home/node/.claude   # reuse the same subscription login
+      - ./generated:/generated             # writable output
+      - ./workspace:/workspace
+    networks:
+      - agentnet
+
+  # Observability: local-first dashboard aggregating Claude Code session data —
+  # token spend, costs, session history. This is the ladder's AG-3 "cost
+  # telemetry into your observability stack" and the substrate for the
+  # agentic-leverage metric. Bound to localhost only.
+  agentsview:
+    image: ghcr.io/kenn-io/agentsview@sha256:2abee0be1ffa4602b277383ce8703a26056bcfaa953451428ca588e50c52e79b  # ghcr.io/kenn-io/agentsview:latest — pinned 2026-07-24, see context/image-policy.json
+    container_name: agentsview
+    restart: unless-stopped
+    # agentsview validates the browser's Host header against an allowlist built
+    # from --host/--port, i.e. :8080 INSIDE the container. We publish it on 8090,
+    # so the browser sends Host: …:8090 and every request is refused with
+    # "Forbidden: request Host … is not in the allowed set". Naming the external
+    # origins fixes it without moving the port. Both spellings are listed because
+    # localhost and 127.0.0.1 are DIFFERENT origins to this check, and a UI that
+    # works at one address and not the other is a support ticket waiting to happen.
+    # Repeats the image's default Cmd (--host/--no-browser) because `command:`
+    # REPLACES it rather than appending.
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--no-browser"
+      - "--public-origin"
+      - "http://localhost:8090,http://127.0.0.1:8090"
+    ports:
+      # BOTH loopback stacks. `localhost` resolves to ::1 first on Windows, and a
+      # 127.0.0.1-only publish means every `localhost:PORT` request TIMES OUT
+      # (not refused — it hangs, which reads like the service is broken). Still
+      # loopback-only, never the LAN.
+      - "127.0.0.1:8090:8080"     # dashboard at http://localhost:8090
+      - "[::1]:8090:8080"
+    volumes:
+      - agentsview-data:/data
+      - claude-config:/sessions/claude:ro   # read the runner's ~/.claude sessions
+    networks:
+      - agentnet
+
+volumes:
+  claude-config:
+  gemini-config:
+  n8n-data:
+  agentsview-data:
+
+networks:
+  agentnet:

@@ -1,0 +1,7 @@
+{
+  "name": "gemini-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HTTP wrapper around a headless agent CLI (Gemini/Antigravity), provider-flagged",
+  "main": "server.js"
+}

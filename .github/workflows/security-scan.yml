@@ -1,0 +1,270 @@
+# Vulnerability scan for the container stack.
+#
+# The complement to scripts/image_policy_check.py: that one is STATIC (are the
+# images pinned, and have the pins been reviewed?) and runs on every push. This
+# one is DYNAMIC (do the pinned images actually contain known CVEs?) and runs on
+# a SCHEDULE — because a pinned image gets more vulnerable over time without a
+# single line of our code changing. Nothing in a push-triggered pipeline can
+# catch that; only a clock can.
+#
+# Why weekly rather than per-push: the image scan pulls several hundred MB. The
+# fast checks stay in quality.yml; this is the deep one.
+#
+# Failures route through the same channel seam as the rest of the fleet — see
+# ai-standards/references/ci-notifications.md.
+name: security-scan
+
+on:
+  schedule:
+    # DAILY, 06:17 UTC. Weekly was the original cadence and it is not good enough:
+    # the 2026 pattern is CVEs exploited within 36 hours of disclosure, so a
+    # 7-day loop can leave a known-exploited flaw live for six of them.
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}        # and on demand, e.g. after a CVE announcement
+  push:
+    branches: [main]
+    paths:                     # re-scan when what we run — or what we ignore — changes
+      - "docker-compose.yml"
+      - "**/Dockerfile*"
+      - "context/image-policy.json"
+      - ".trivyignore"                        # adding/removing an exception changes the verdict
+      - ".github/workflows/security-scan.yml" # and so does editing the scan itself
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Trivy is invoked as a PINNED image rather than via the marketplace action.
+      # Two reasons, both from dependency-security.md: it removes a third-party
+      # GitHub Action from a security-critical pipeline (an action runs arbitrary
+      # code with repo context), and it lets us pin the scanner the same way we
+      # pin everything else. Pinning the scanner is safe — Trivy downloads its
+      # vulnerability DB at run time, so a pinned binary still sees fresh CVEs.
+      # TRIVY_REF is recorded in context/image-policy.json and reviewed with the rest.
+      - name: Resolve pinned scanner
+        run: echo "TRIVY=aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f" >> "$GITHUB_ENV"
+
+      # IaC/Dockerfile misconfiguration — fast, no image pull. Catches the
+      # classic own-goals (running as root, no USER, secrets in build args).
+      - name: Trivy — config / Dockerfile misconfiguration
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$TRIVY" \
+            config . --severity CRITICAL,HIGH --exit-code 1 --ignorefile .trivyignore
+
+      # The pinned third-party images — the ones we do not build and cannot fix,
+      # only upgrade. This is the check that would have surfaced the 2026 n8n
+      # RCEs without waiting for someone to read a security bulletin.
+      - name: Trivy — pinned third-party images
+        run: |
+          set -u
+          fail=0
+          # Parse the digests straight out of the policy file so this can never
+          # drift from what image_policy_check.py enforces.
+          refs=$(python3 -c "import json;print('\n'.join(i['ref']+'@'+i['digest'] for i in json.load(open('context/image-policy.json'))['images']))")
+          for ref in $refs; do
+            echo "== $ref =="
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD:/src" -w /src "$TRIVY" image --quiet --scanners vuln \
+              --severity CRITICAL --exit-code 1 --ignore-unfixed \
+              --ignorefile .trivyignore "$ref" || fail=1
+          done
+          # --ignore-unfixed on purpose: a CRITICAL with no available patch is a
+          # risk to accept and record, not a build to block on forever. Fixable
+          # criticals are the ones that mean "upgrade now".
+          exit $fail
+
+  # The images we RUN, not just the ones we pull. The pinned-base scan above
+  # covers what upstream ships; this covers what our Dockerfiles then install on
+  # top — including the agent CLIs, which is the layer an agent framework can
+  # least afford to leave unscanned.
+  #
+  # Building here is also the only thing that proves the Dockerfiles still build.
+  # That is not theoretical: adding the digest pins put a trailing `# comment` on
+  # every FROM line, which Docker parses as arguments, and every image was
+  # unbuildable for a day — invisible because no job built one. image_policy_check
+  # now has a static guard for that specific bug; this job is the general case.
+  #
+  # Cost: ~10-15 CI min/day. Inside the free tier, but it is the expensive job
+  # here — if it becomes a constraint, add a buildx layer cache before dropping
+  # the frequency.
+  built-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve pinned scanner
+        run: echo "TRIVY=aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f" >> "$GITHUB_ENV"
+
+      - name: Build and scan every service image
+        run: |
+          set -u
+          fail=0
+          scan() {  # $1 = tag
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD:/src" -w /src "$TRIVY" image --quiet --scanners vuln \
+              --severity CRITICAL --exit-code 1 --ignore-unfixed \
+              --ignorefile .trivyignore "$1"
+          }
+          # NOTE: deliberately NOT `docker build -q`. Quiet mode suppresses the
+          # build output, so the first real failure here reported only "failed to
+          # solve" with no compiler/npm error — the diagnosability rule ("log the
+          # inputs that decided the outcome") broken in the tool meant to enforce
+          # it. Verbose builds cost log lines; a blind failure costs an hour.
+          for svc in lanes router scrubber claude-runner gemini-runner; do
+            echo "::group::$svc"
+            # A build failure fails the job. We cannot scan what will not build,
+            # and silently skipping it would report a clean scan over a gap.
+            if docker build -t "bw-scan/$svc:ci" "./$svc"; then
+              scan "bw-scan/$svc:ci" || fail=1
+            else
+              echo "BUILD FAILED: $svc — cannot scan, treating as failure"; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      # The privileged builder lane, in its OWN step on purpose. It is
+      # profile-gated off by default and not part of the running stack, so a
+      # broken build here is a MAINTENANCE problem, not live exposure — an image
+      # that cannot build also cannot run. Mixing it into the step above meant one
+      # unusable optional lane turned the whole daily CVE signal red, which is
+      # exactly the alert-fatigue failure notification-taxonomy.md warns about.
+      # continue-on-error keeps it VISIBLE (the step goes red in the UI) without
+      # drowning the signal for the five images that actually run.
+      - name: Build and scan the privileged builder lane
+        continue-on-error: true
+        run: |
+          set -u
+          docker build -f capability-factory/Dockerfile.builder \
+            -t bw-scan/capability-factory:ci ./capability-factory
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/src" -w /src "$TRIVY" image --quiet --scanners vuln \
+            --severity CRITICAL --exit-code 1 --ignore-unfixed \
+            --ignorefile .trivyignore bw-scan/capability-factory:ci
+
+  notify:
+    needs: [scan, built-images]
+    if: failure()
+    runs-on: ubuntu-latest
+    # Least privilege, and each is needed: actions: read lets the diagnostician
+    # read the failed job's log (a permissions: block REPLACES the default set,
+    # so omitting it silently 403s); contents/issues/pull-requests: write let it
+    # comment on the commit or the PR. Nothing else — the poster has no rerun or
+    # git-write path and the token should not offer it one.
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      # The notify job runs on a fresh runner, so the diagnostician's own source
+      # and its known-cause table have to be checked out before it can run.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Diagnose BEFORE notifying, so the alert carries a cause rather than just
+      # a red X. Deterministic only: a known cause costs nothing and cannot
+      # hallucinate; an unknown one says so instead of inventing one.
+      #
+      # This step CANNOT fix anything — see the tool's header for why an agent
+      # rewarded for green CI learns to file down the gates.
+      - name: Diagnose the failure (advise only)
+        id: diagnose
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          # Per-JOB logs, not `gh run view --log-failed`. This job is part of the
+          # run it reports on, so the run is still in progress and its archived
+          # log does not exist yet — that call returns something non-empty but
+          # useless, which gets reported as an unrecognised failure.
+          : > /tmp/ci.log
+          IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100"                   --jq '.jobs[] | select(.conclusion=="failure") | .id' 2>/dev/null || true)
+          for id in $IDS; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" >> /tmp/ci.log 2>/dev/null || true
+          done
+          if [ ! -s /tmp/ci.log ]; then
+            echo "failed to get run: could not read any failed job log" > /tmp/ci.log
+            echo "::warning::could not read the failure log — check that this job grants actions: read"
+          fi
+          # Has this workflow EVER concluded successfully? It is the single most
+          # load-bearing fact about a red build and the run list does not show
+          # it: a first-run failure and a regression look identical there and
+          # need opposite responses. One workflow in this fleet failed 7 for 7
+          # while everyone looked for what the last commit had broken.
+          # Looked up here rather than in the tool, which has no network by
+          # design. Defaults to "unknown", never to a guess.
+          EVER=unknown
+          # Strip at the @ BEFORE taking the basename. GITHUB_WORKFLOW_REF is
+          # owner/repo/.github/workflows/x.yml@refs/heads/main — basename first
+          # returns "main", which resolves to no workflow at all and silently
+          # yields "unknown" forever. Verified against the real API, not assumed.
+          WF_FILE="${GITHUB_WORKFLOW_REF%%@*}"; WF_FILE="${WF_FILE##*/}"
+          if SUCCESSES=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WF_FILE/runs?status=success&per_page=1" --jq '.total_count' 2>/dev/null); then
+            [ "$SUCCESSES" -gt 0 ] 2>/dev/null && EVER=yes || EVER=no
+          fi
+          echo "workflow has ever passed: $EVER"
+          python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" > /tmp/diag.txt 2>&1 || true
+          python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" --json > /tmp/diag.json 2>/dev/null || echo '{}' > /tmp/diag.json
+          cat /tmp/diag.txt
+          # The ALERT gets one line; the full diagnosis goes in the comment,
+          # which is a click away and does not compete for attention with every
+          # other message in the channel.
+          BLUF=$(python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" --bluf 2>/dev/null | head -1)
+          echo "BLUF=${BLUF:-CI failed; no diagnosis produced.}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Put the cause where the failure is already being discussed: a comment on
+      # the PR (or the commit) and the run-page job summary. Zero configuration.
+      - name: Comment the diagnosis on GitHub
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/ci_comment.py --diagnosis /tmp/diag.json --target github
+
+      - name: Notify on failure
+        env:
+          KIND: ${{ vars.NOTIFY_KIND || 'slack' }}
+          SLACK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEAMS_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          MENTION: ${{ vars.NOTIFY_SLACK_MENTION }}
+          BLUF: ${{ steps.diagnose.outputs.BLUF }}
+        run: |
+          case "$KIND" in
+            slack) URL="$SLACK_URL" ;;
+            teams) URL="$TEAMS_URL" ;;
+            *)     URL="$WEBHOOK_URL" ;;
+          esac
+          if [ -z "$URL" ]; then
+            echo "No webhook URL for NOTIFY_KIND=$KIND — skipping."
+            exit 0
+          fi
+          SHA="${GITHUB_SHA:0:8}"
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          FALLBACK="Security scan FAILED: $GITHUB_REPOSITORY @ $SHA - known CVE in a pinned image, or a Dockerfile misconfig - $RUN"
+          case "$MENTION" in
+            channel) MENTION="<!channel>" ;;
+            here)    MENTION="<!here>" ;;
+            *)       : ;;
+          esac
+          BODY=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$SHA" --arg run "$RUN" --arg fb "$FALLBACK" --arg mention "$MENTION" --arg diag "$DIAG" '($mention | if . == "" then "" else . + " " end) as $m | { text: ($m + $fb), blocks: [ { type:"section", text:{ type:"mrkdwn", text:($m + ":rotating_light: *Security scan failed* — `" + $repo + "`") } }, { type:"section", text:{ type:"mrkdwn", text:"A pinned image has a fixable CRITICAL CVE, or a Dockerfile misconfiguration was found. Re-pin and update `context/image-policy.json`." } }, { type:"actions", elements:[ { type:"button", text:{ type:"plain_text", text:"View scan" }, url:$run, style:"danger" } ] } ] }')
+          curl -fsS -X POST -H 'content-type: application/json' -d "$BODY" "$URL" || echo "notify POST failed (non-fatal)"
+
+      # The detail, threaded under the alert. Runs AFTER the alert because it
+      # replies to it. Needs a BOT TOKEN: an incoming webhook returns no message
+      # ts, so a webhook alert cannot be threaded at all — with webhook-only
+      # setup this step reports that and skips.
+      - name: Reply with the diagnosis in the Slack thread
+        continue-on-error: true
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+        run: python scripts/ci_comment.py --diagnosis /tmp/diag.json --target slack

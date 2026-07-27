@@ -1,0 +1,2 @@
+# Generated CLIs/MCP servers from the capability factory land here.
+# Mounted read-only into the runner; commit the ones you keep.

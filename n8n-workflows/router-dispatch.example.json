@@ -1,0 +1,59 @@
+{
+  "name": "Cost-tiered dispatch example",
+  "meta": { "description": "Calls the cost-tiering router instead of a runner directly. The router applies deterministic rules, picks the cheapest capable model, and can cross-verify. Set task_type to steer the tier, or omit it to let the router triage." },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "cccccccc-0000-0000-0000-000000000001",
+      "name": "When clicking Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "p1", "name": "prompt", "type": "string", "value": "Design a normalized schema for a multi-tenant billing service with per-tenant isolation." },
+            { "id": "p2", "name": "task_type", "type": "string", "value": "architect" },
+            { "id": "p3", "name": "goal", "type": "string", "value": "Correct, normalized, enforces tenant isolation." },
+            { "id": "p4", "name": "verify", "type": "boolean", "value": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cccccccc-0000-0000-0000-000000000002",
+      "name": "Build request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://router:8080/route",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-router-token", "value": "change-me-to-a-long-random-secret" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"prompt\": $json.prompt, \"task_type\": $json.task_type, \"goal\": $json.goal, \"verify\": $json.verify } }}",
+        "options": {}
+      },
+      "id": "cccccccc-0000-0000-0000-000000000003",
+      "name": "Route (cheapest capable)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "When clicking Test": { "main": [[{ "node": "Build request", "type": "main", "index": 0 }]] },
+    "Build request": { "main": [[{ "node": "Route (cheapest capable)", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "active": false
+}

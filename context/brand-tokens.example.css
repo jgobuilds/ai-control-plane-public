@@ -1,0 +1,57 @@
+/* PLACEHOLDER brand tokens — the engine ships neutral on purpose.
+   Do NOT put a real org identity here. Either provide a private overlay at
+   ../brightside-instance (loaded first by onboarding), or copy this file to
+   brand-tokens.css (gitignored) and edit it. The pre-commit guard blocks real
+   brand tokens from entering this public repo.
+
+   These variable NAMES are the contract. An overlay implements every name here;
+   a generated artifact uses only names from here. Keep the two in step. */
+
+:root {
+  /* generic placeholders — swap for your org, or override via the instance overlay */
+  --brand-primary:#4F46E5;
+  --brand-primary-strong:#4338CA;
+  --brand-accent:#F59E0B;
+  --brand-accent-strong:#D97706;
+  --brand-success:#16A34A;
+  --brand-danger:#DC2626;
+  --brand-purple:#7C3AED;
+  --brand-sky:#0EA5E9;
+  --brand-yellow:#EAB308;
+
+  --brand-ink:#1F2937;
+  --brand-ink-strong:#111827;
+  --brand-muted:#6B7280;
+  --brand-line:#E5E7EB;
+  --brand-bg:#FFFFFF;
+  --brand-bg-soft:#F9FAFB;
+  --brand-bg-tint:#EEF2FF;
+
+  --brand-font-head:system-ui, sans-serif;
+  --brand-font-body:system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --brand-radius:14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand-primary:#818CF8;
+    --brand-primary-strong:#A5B4FC;
+    --brand-accent:#FBBF24;
+    --brand-accent-strong:#FCD34D;
+    --brand-success:#4ADE80;
+    --brand-danger:#F87171;
+    --brand-purple:#A78BFA;
+    --brand-sky:#38BDF8;
+    --brand-yellow:#FDE047;
+
+    --brand-ink:#E5E7EB;
+    --brand-ink-strong:#F9FAFB;
+    --brand-muted:#9CA3AF;
+    --brand-line:#374151;
+    --brand-bg:#0B0F17;
+    --brand-bg-soft:#111827;
+    --brand-bg-tint:#171F2E;
+  }
+}
+
+/* categorical order for charts: primary → accent → success → purple → sky → danger → yellow */

@@ -1,0 +1,65 @@
+{
+  "_comment": "Model selection policy — WHICH model and WHICH effort for each kind of work, plus the catalog facts that make the choice checkable. router/policy.json owns ROUTING (task -> tier); this file owns the JUSTIFICATION and the dated facts behind it (price, context, retirement). scripts/model_policy_check.py enforces that the two agree and that nothing here has gone stale. Edit this file, not prose in a doc — a model choice buried in Markdown cannot be validated.",
+
+  "reviewedOn": "2026-07-22",
+  "reviewCadenceDays": 90,
+  "reviewBy": "2026-10-20",
+  "_review_note": "Model capability moves faster than most standards. A dated review is the only thing that stops a tier map from silently describing last year's models. scripts/model_policy_check.py fails once reviewBy passes.",
+
+  "catalog": {
+    "_comment": "Facts, not opinions. status: active | deprecated | retired. retiresOn is the published retirement date where one exists. Prices are USD per 1M tokens.",
+    "claude-fable-5":   { "provider": "claude", "status": "active", "context": 1000000, "in": 10.0, "out": 50.0, "note": "Most capable widely released. Thinking always on — omit the thinking param; an explicit disabled returns 400. No assistant prefill. Requires 30-day data retention (unavailable under ZDR). Safety classifiers can return stop_reason=refusal." },
+    "claude-opus-4-8":  { "provider": "claude", "status": "active", "context": 1000000, "in": 5.0,  "out": 25.0, "note": "Default Opus tier. Strongest long-horizon autonomous execution. Adaptive thinking only." },
+    "claude-sonnet-5":  { "provider": "claude", "status": "active", "context": 1000000, "in": 3.0,  "out": 15.0, "introIn": 2.0, "introOut": 10.0, "introEndsOn": "2026-08-31", "note": "Near-Opus quality on coding/agentic at Sonnet cost. Adaptive thinking on by default. ~30% more tokens for the same text than Sonnet 4.6 (new tokenizer) — re-baseline budgets, don't reuse old counts." },
+    "claude-haiku-4-5": { "provider": "claude", "status": "active", "context": 200000,  "in": 1.0,  "out": 5.0,  "note": "Cheapest Claude. 200K context — the only current model under 1M. Simple, speed-critical work only." },
+    "claude-opus-4-1":  { "provider": "claude", "status": "deprecated", "retiresOn": "2026-08-05", "in": 5.0, "out": 25.0, "note": "Do not adopt. Migrate to claude-opus-4-8." },
+    "gemini-2.5-flash-lite": { "provider": "gemini", "status": "active", "note": "Free-tier lane for bulk deterministic-adjacent work. Cross-vendor: blocked for confidential scopes by policy.json risk.blockCrossVendor." }
+  },
+
+  "effort": {
+    "_comment": "output_config.effort is a real cost/quality lever and is UNDER-USED — it moves spend more than model choice does on many tasks. Levels: low | medium | high | xhigh | max. Default when unset is high.",
+    "default": "high",
+    "guidance": {
+      "low":    "Short, scoped, latency-sensitive, not intelligence-sensitive. Also the right setting for narrow subagents.",
+      "medium": "Cost-sensitive routine work where some capability tradeoff is acceptable.",
+      "high":   "The default. Most intelligence-sensitive work.",
+      "xhigh":  "Best setting for most coding and agentic work on Fable 5 / Opus 4.8 / Sonnet 5. Give max_tokens headroom (>=64000) — output truncates mid-thought otherwise.",
+      "max":    "Correctness matters more than cost. Diminishing returns and can overthink — test before committing."
+    }
+  },
+
+  "workTypes": {
+    "_comment": "Must stay in sync with router/policy.json taskTypes — model_policy_check.py enforces it. `why` is not decoration: an unjustified tier is how cost creeps.",
+    "classify":    { "tier": "t1", "effort": "low",    "why": "Fixed output space, no reasoning chain. A bigger model buys nothing measurable." },
+    "extract":     { "tier": "t1", "effort": "low",    "why": "Schema-bounded. Use strict tool use / structured outputs rather than a smarter model." },
+    "transform":   { "tier": "t1", "effort": "low",    "why": "Mechanical. Prefer t0 rules when the shape is stable." },
+    "route":       { "tier": "t1", "effort": "low",    "why": "A classification wearing a different hat." },
+    "summarize":   { "tier": "t2", "effort": "medium", "why": "Needs judgment about salience, but the output is checkable at a glance." },
+    "generate":    { "tier": "t2", "effort": "high",   "why": "Quality is user-visible; Sonnet 5 is near-Opus here at a third of the cost." },
+    "code-edit":   { "tier": "t2", "effort": "xhigh",  "why": "Coding is the documented sweet spot for xhigh. Higher effort often REDUCES total cost by cutting turn count." },
+    "debug":       { "tier": "t2", "effort": "xhigh",  "why": "Long tool-call chains; under-thinking here means more rounds, not cheaper rounds." },
+    "plan":        { "tier": "t3", "effort": "high",   "why": "Errors compound into everything downstream — the cheapest place to spend." },
+    "architect":   { "tier": "t3", "effort": "xhigh",  "why": "Highest blast radius per token. Hardest to reverse once built on." },
+    "test-design": { "tier": "t3", "effort": "high",   "why": "Tests are the verification substrate; a weak test suite hides failures everywhere else." },
+    "review":      { "tier": "t3", "effort": "xhigh",  "why": "Adversarial reading is capability-sensitive. Cross-vendor verify is on for this type in policy.json." }
+  },
+
+  "selectionRules": [
+    "Cheapest tier that clears the bar, not the best model available. The router picks the LOWEST tier a task needs.",
+    "Deterministic (t0) beats any model. If the shape is stable, write the rule — it is free, instant, and testable.",
+    "Raise EFFORT before raising TIER. Effort is a smaller, cheaper step and often the actual fix for shallow output.",
+    "Errors that compound justify a higher tier: planning, architecture, and review feed everything downstream.",
+    "Never route confidential-scope work cross-vendor. Enforced structurally by risk.blockCrossVendor, not by remembering.",
+    "Long-horizon agentic runs: give the FULL task spec in one well-specified first turn and run at high/xhigh. Ambiguous prompts revealed across turns cost more and perform worse.",
+    "Match max_tokens to effort. At xhigh/max set >=64000 or output truncates mid-thought."
+  ],
+
+  "reviewTriggers": {
+    "_comment": "Events that force an OFF-CYCLE review, independent of reviewBy. The scheduled review catches drift; these catch shocks.",
+    "onNewModelRelease": "Re-run the tier map: a new mid-tier often absorbs work from the tier above it.",
+    "onPriceChange": "Intro pricing expiring is a price rise. See catalog introEndsOn.",
+    "onDeprecationNotice": "Any catalog entry gaining a retiresOn date must be migrated before it lands.",
+    "onEvalRegression": "A drop in eval/drift metrics (EVAL.md) may indicate a tier is now under-powered for its task type.",
+    "onPromptScaffoldingRot": "Instructions written to work around an older model's limitation become pure overhead — and can REDUCE quality on newer models. Re-test scaffolding after a tier change."
+  }
+}

@@ -1,0 +1,15 @@
+# Wires this repo to the shared review lenses in ../ai-standards, so the house
+# rules are APPLIED at review time rather than only written down.
+#
+# Precedence, highest wins: repo profile -> this overlay -> base skill, so a skill
+# upgrade never clobbers a house rule.
+#
+# NOTE: `overlay` resolves as a FILESYSTEM path, not a URL. It only works where
+# ai-standards is a sibling on disk — which is why it is optional, and why this
+# repo's own AGENTS.md/CLAUDE.md must still carry everything a contributor needs.
+overlay: ../ai-standards
+lenses: [pragmatic-principles, design-patterns, code-smells,
+         environment-hygiene, agent-context-architecture, build-vs-adopt,
+         change-safety, diagnosability, notification-taxonomy,
+         cost-awareness, concurrency-and-branching, dependency-security,
+         brand]

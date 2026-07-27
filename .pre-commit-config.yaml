@@ -1,0 +1,12 @@
+# Public-hygiene guard — keeps the private Brightside identity out of this public
+# engine. Real brand/onboarding/marketing live in ../brightside-instance.
+# Install once:  pip install pre-commit && pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: public-hygiene
+        name: no private identity in the public engine
+        entry: python scripts/check_public_hygiene.py
+        language: system
+        pass_filenames: false
+        always_run: true

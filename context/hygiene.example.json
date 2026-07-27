@@ -1,0 +1,6 @@
+{
+  "_comment": "Public-hygiene guard config — NEUTRAL default so the engine is org-agnostic. To enforce YOUR brand tokens, put a hygiene.json in your <org>-instance overlay (loaded first) or copy this to context/hygiene.json (gitignored). blocked_paths are the instance-only slots and apply to every org; forbidden_hex/forbidden_text are yours to fill.",
+  "forbidden_hex": [],
+  "forbidden_text": [],
+  "blocked_paths": ["context/brand.md", "context/brand-tokens.css", "marketing/"]
+}

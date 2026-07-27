@@ -1,0 +1,76 @@
+# Accepted security findings — the documented exception list for the Trivy scan
+# in .github/workflows/security-scan.yml.
+#
+# Same discipline as job-applications' `pip-audit --ignore-vuln`: an exception is
+# allowed, but it must be WRITTEN DOWN with a reason and a revisit trigger. A
+# silently-suppressed finding is indistinguishable from one nobody noticed.
+#
+# Format: one finding ID per line. Every entry MUST carry, in a comment above it:
+#   - what it is, and why it is accepted (not merely inconvenient)
+#   - the compensating control, if any
+#   - what would make us revisit
+#
+# An entry with no reason is not an exception, it is a hole. Prefer upgrading the
+# pinned digest over adding a line here.
+
+# ---------------------------------------------------------------------------
+# CVE-2026-59873 — node-tar: DoS via a crafted gzip bomb.
+# Found by the first real run of this scan (2026-07-25), in n8nio/n8n (tar
+# 7.5.16) and the node:22-bookworm-slim base (7.5.11). Fixed upstream in 7.5.19.
+#
+# WHY ACCEPTED — not merely inconvenient: there is no patched base image to move
+# to. Both digests were resolved from the newest published tags on 2026-07-24, so
+# upgrading is not an available action today; the only alternatives are to block
+# our own builds indefinitely or to accept and track it.
+#
+# COMPENSATING CONTROLS: the vulnerable code is npm's bundled tar, which we use
+# at BUILD time from a lockfile, never on untrusted runtime input. The services
+# built on this base (router, scrubber, claude-runner, gemini-runner) are HTTP
+# services that do not extract archives, and no deployed n8n workflow extracts an
+# archive either (the live lanes are cron -> HTTP -> parse -> notify). Reaching
+# this requires feeding a hostile archive to a code path we do not expose.
+# Severity here is availability-only — no code execution, no data disclosure.
+#
+# REVISIT: at the monthly image-policy review (context/image-policy.json
+# reviewBy), check whether node:22-bookworm-slim and n8n ship tar >= 7.5.19; when
+# they do, re-pin and DELETE this entry. Also revisit immediately if any lane
+# starts extracting archives from an external source (e.g. drive-sync handling
+# zipped attachments), because that would create the missing reachability.
+CVE-2026-59873
+
+# ---------------------------------------------------------------------------
+# DS-0002 (HIGH) — "Specify at least 1 USER command with a non-root user".
+# Affects claude-runner, gemini-runner and scrubber. router and lanes already run
+# non-root (USER node / USER lanes).
+#
+# Surfaced 2026-07-25, and ONLY because the Dockerfiles were repaired: while the
+# FROM lines were unparseable, Trivy's config scanner silently found nothing.
+# A scanner with nothing to say is not the same as a clean scan.
+#
+# WHY IT CANNOT SIMPLY BE FIXED — verified 2026-07-25, not assumed:
+#  * scrubber: /vault and /workspace are bind mounts on a Windows drive exposed to
+#    WSL over 9p/drvfs, mounted with uid=0;gid=0 SYNTHESIZED and no metadata
+#    option. Everything under it reads as root:root and `chown` is a silent no-op
+#    (tested). `USER node` (uid 1000) would leave the scrubber unable to write the
+#    PII vault at all. This is a platform constraint, not an oversight.
+#  * claude-runner / gemini-runner: carry cap_add NET_ADMIN and run
+#    init-firewall.sh, which sets iptables at startup and requires root. The real
+#    fix is to drop privileges AFTER firewall setup (gosu), which touches the
+#    startup path and the CLI auth volumes.
+#
+# COMPENSATING CONTROL ADDED 2026-07-25 — since the uid cannot change, take away
+# what root can DO: scrubber, router and lanes now run with `cap_drop: [ALL]` and
+# `no-new-privileges:true`. Verified: CapEff=0000000000000000 in all three, and
+# all three still function (scrubber writes vault + workspace and serves; lanes
+# /health returns ok; router responds). Root inside a container with zero
+# capabilities and no escalation path is a substantially smaller target.
+# Plus: all are internal to agentnet with NO published host port, the runners are
+# default-deny egress, and the scrubber needs no egress at all.
+#
+# STILL THE WEAKEST EXCEPTION HERE. Reduced, not resolved.
+# REVISIT: (a) move /vault and /workspace to NAMED DOCKER VOLUMES, which Docker
+# owns and can chown, making USER node possible — the real fix, and an
+# architectural change worth doing deliberately; (b) or enable WSL metadata mounts
+# (/etc/wsl.conf), noting that changes ownership semantics for every project on
+# that drive; (c) runners — drop-after-firewall with gosu. Monthly review.
+DS-0002

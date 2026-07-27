@@ -1,0 +1,70 @@
+# Secrets — never commit
+.env
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# PII token vault — the whole point is that this never leaves the machine
+vault/
+
+# Audit ledger — runtime compliance record; retain on the deploy volume, not in source.
+# This also covers audit/deletions/ — the deletion certificates from
+# scripts/offboard_scope.py are compliance EVIDENCE kept on the deploy volume
+# (ship to WORM/append-only storage), never committed to the framework repo.
+audit/
+
+# Kill switch runtime state — the operator halt flag lives on the deploy volume,
+# not in source. Ignore everything under control/ EXCEPT the committed example.
+control/*
+!control/halt.example.json
+
+# Eval / improvement-loop data — regression datasets, captured traces, and the
+# feedback inbox hold TOKENIZED client content (governed observability: per-scope,
+# PII-tokenized, retention-bound, local). Keep them on the deploy volume, NOT in
+# source — EXCEPT the committed starter suite (the same pattern as control/ above).
+eval/datasets/**
+!eval/datasets/starter/
+!eval/datasets/starter/**
+eval/traces/
+eval/inbox/
+
+# The point of ./workspace is to Git your workflow JSON + CLAUDE.md,
+# so it is intentionally NOT ignored — but runtime work products are:
+# engagement/client content stays out of the framework repo.
+workspace/.fanout/
+workspace/scopes/**/ingest/
+workspace/scopes/**/deliverables/
+
+# --- PII controls (ai-standards) ---
+# Real personal data lives OUTSIDE the repo. These paths are conventional
+# homes for it; the pre-commit hook is what actually enforces the rule.
+*.local.*
+*.private.*
+.local/
+data/private/
+data/raw/
+secrets/
+.pii-vault/
+.env
+.env.*
+!.env.example
+# --- end PII controls ---
+
+# --- Brand / private instance overlay (public-hygiene) ---
+# Real identity lives in ../brightside-instance; this engine ships neutral.
+context/brand.md
+context/brand-tokens.css
+!context/brand.example.md
+!context/brand-tokens.example.css
+marketing/
+context/hygiene.json
+!context/hygiene.example.json
+# Operator guardrail patterns: the private tripwire set. The .example is the
+# committed neutral one; the live file must never reach this public repo.
+context/guardrail-patterns.json
+!context/guardrail-patterns.example.json
+# --- end brand ---
+
+# ask-human answer channel — runtime handshake state, never source.
+asks/

@@ -1,0 +1,442 @@
+# Framework-coverage map — Brightworks controls -> recognized AI-governance frameworks
+#
+# HAND-AUTHORED source of truth. `scripts/gen_compliance_map.py` reads this file
+# and emits docs/compliance-map.md (three matrices + coverage summary + gaps).
+# `tests/compliance_test.py` validates it is well-formed and that every referenced
+# Brightworks control name matches a real control row in GOVERNANCE.md.
+#
+# Each mapping entry: control (a GOVERNANCE.md control name, or "-" for a pure gap)
+#   -> framework -> requirement satisfied -> how (1 line) -> coverage.
+# coverage is one of: full | partial | none. Be HONEST — partial/none where
+# Brightworks genuinely does not cover something.
+#
+# Framework names are cited nominatively; requirement text is summarized in our
+# own words (NOT reproduced verbatim). Where a framework's numbering/wording
+# varies by version, the version/date used is recorded in `frameworks` below.
+
+meta:
+  generated_by: "scripts/gen_compliance_map.py"
+  source_of_truth: "compliance/framework-map.yaml"
+  control_catalog: "GOVERNANCE.md (control-catalog table)"
+  coverage_values: [full, partial, none]
+
+frameworks:
+  owasp_agentic:
+    name: "OWASP Agentic AI — Threats & Mitigations"
+    short: "OWASP Agentic Top 10"
+    version_note: >-
+      Threat categories (T1..T15) follow the OWASP GenAI Security Project
+      "Agentic AI — Threats and Mitigations" guide (v1.0, Feb 2025) and the
+      related OWASP Agentic threat taxonomy circulated through 2026. OWASP has
+      not published a fixed, officially numbered "Top 10 for Agentic AI" the way
+      it has for LLM applications; numbering therefore varies by draft. We label
+      every entry with a short threat NAME (numbers are indicative only) and map
+      the threats most relevant to Brightworks. Verified against the taxonomy as
+      of 2026-07-18.
+  nist_ai_rmf:
+    name: "NIST AI Risk Management Framework (AI RMF 1.0)"
+    short: "NIST AI RMF"
+    version_note: >-
+      Organized by the four AI RMF functions — Govern, Map, Measure, Manage
+      (NIST AI 100-1, Jan 2023, plus the Generative AI Profile NIST-AI-600-1,
+      Jul 2024). Sub-requirements are summarized in our own words, not quoted.
+      Reviewed 2026-07-18.
+  eu_ai_act:
+    name: "EU Artificial Intelligence Act (Regulation (EU) 2024/1689)"
+    short: "EU AI Act"
+    version_note: >-
+      High-risk-system obligations, Chapter III Section 2 (Articles 9-15) plus
+      post-market monitoring / serious-incident reporting (Articles 72-73).
+      Article numbers per the OJ text published 2024-07-12. Requirements are
+      paraphrased, not reproduced. Applicability depends on the deployer's own
+      risk classification; this map treats the obligations as a control
+      checklist, not a legal determination. Reviewed 2026-07-18.
+
+# Canonical control list — MUST mirror the GOVERNANCE.md control-catalog rows.
+# The test cross-checks each `name` against the names parsed from GOVERNANCE.md.
+controls:
+  - { id: "0",  name: "Kill switch + circuit breaker" }
+  - { id: "1",  name: "Context scope" }
+  - { id: "2",  name: "Ethical walls" }
+  - { id: "3",  name: "PII" }
+  - { id: "3a", name: "Injection/output guardrails" }
+  - { id: "3b", name: "Tool allowlisting" }
+  - { id: "4",  name: "Risk" }
+  - { id: "5",  name: "Operating mode" }
+  - { id: "6",  name: "Cost tier" }
+  - { id: "7",  name: "Human gates" }
+  - { id: "7a", name: "Approver RBAC + SoD" }
+  - { id: "8",  name: "Audit ledger" }
+  - { id: "9",  name: "Retention & deletion" }
+  - { id: "10", name: "AI use-case register" }
+  - { id: "11", name: "Framework-coverage map" }  # this artifact itself (meta-control; no self-mapping)
+  - { id: "12", name: "Eval / drift lane" }
+  - { id: "13", name: "Quality regression / improvement loop" }
+
+# ---------------------------------------------------------------------------
+# MAPPINGS
+# ---------------------------------------------------------------------------
+mappings:
+
+  # ===================== OWASP Agentic AI threats =====================
+  - control: "Context scope"
+    framework: owasp_agentic
+    requirement: "T1 Memory Poisoning"
+    how: "Agent sees only its own scope + ancestors; siblings are not mounted, so poisoned memory cannot cross scopes (silo mode)."
+    coverage: partial
+  - control: "Retention & deletion"
+    framework: owasp_agentic
+    requirement: "T1 Memory Poisoning"
+    how: "Ingest/deliverable files age out on retentionDays; offboarding purges a scope's subtree + vault, limiting persistence of poisoned context."
+    coverage: partial
+  - control: "Injection/output guardrails"
+    framework: owasp_agentic
+    requirement: "T1 Memory Poisoning"
+    how: "Heuristic inputScan flags injection shapes in ingested content before it reaches the agent."
+    coverage: partial
+
+  - control: "Tool allowlisting"
+    framework: owasp_agentic
+    requirement: "T2 Tool Misuse"
+    how: "Per-scope allowedTools least-privilege denies any tool a scope does not need; unlisted tools are refused by the runner."
+    coverage: full
+  - control: "Human gates"
+    framework: owasp_agentic
+    requirement: "T2 Tool Misuse"
+    how: "Irreversible tool actions (ship/promote/apply) require a human approval before dispatch."
+    coverage: partial
+  - control: "Risk"
+    framework: owasp_agentic
+    requirement: "T2 Tool Misuse"
+    how: "High-blast-radius actions (apply/send/execute) trigger requireApproval/requireVerify proportionally."
+    coverage: partial
+
+  - control: "Context scope"
+    framework: owasp_agentic
+    requirement: "T3 Privilege Compromise"
+    how: "Structural OS-mount isolation (silo) means a low-trust scope cannot read a higher-trust one even under --dangerously-skip-permissions."
+    coverage: partial
+  - control: "Ethical walls"
+    framework: owasp_agentic
+    requirement: "T3 Privilege Compromise"
+    how: "Conflicting scopes never share a runner (conformance-tested), preventing lateral privilege reuse across clients."
+    coverage: full
+  - control: "Approver RBAC + SoD"
+    framework: owasp_agentic
+    requirement: "T3 Privilege Compromise"
+    how: "Approver must belong to an authorized identity group for the risk level/scope; approver != requester at high/critical."
+    coverage: partial
+
+  - control: "Kill switch + circuit breaker"
+    framework: owasp_agentic
+    requirement: "T4 Resource Overload"
+    how: "Sliding-window rate/budget breaker refuses new requests once a per-scope/global ceiling is met, halting runaway loops."
+    coverage: partial
+
+  - control: "Risk"
+    framework: owasp_agentic
+    requirement: "T5 Cascading Hallucination"
+    how: "requireVerify forces a fresh-context verifier pass when access/autonomy >= 2, catching propagated errors before action."
+    coverage: partial
+  - control: "Operating mode"
+    framework: owasp_agentic
+    requirement: "T5 Cascading Hallucination"
+    how: "ai-led scopes stamp requiresOutputValidation so a human validates output before it becomes authoritative."
+    coverage: partial
+
+  - control: "Injection/output guardrails"
+    framework: owasp_agentic
+    requirement: "T6 Intent Breaking & Goal Manipulation"
+    how: "inputScan warns/blocks on injection shapes; ingested/event content is treated as data, not instructions."
+    coverage: partial
+  - control: "Context scope"
+    framework: owasp_agentic
+    requirement: "T6 Intent Breaking & Goal Manipulation"
+    how: "Containment limits what a manipulated agent can reach even if its goal is subverted."
+    coverage: partial
+
+  - control: "Operating mode"
+    framework: owasp_agentic
+    requirement: "T7 Misaligned & Deceptive Behaviors"
+    how: "maxAction caps what the agent may do; human validates output in ai-led, human is the actor in human-led."
+    coverage: partial
+  - control: "Audit ledger"
+    framework: owasp_agentic
+    requirement: "T7 Misaligned & Deceptive Behaviors"
+    how: "Every decision (verdict, risk, action) is hash-chained, so misaligned behavior is detectable after the fact."
+    coverage: partial
+
+  - control: "Audit ledger"
+    framework: owasp_agentic
+    requirement: "T8 Repudiation & Untraceability"
+    how: "Append-only, hash-chained, PII-free decision ledger; any edit/delete/reorder breaks the chain (verify_audit.py)."
+    coverage: full
+
+  - control: "Approver RBAC + SoD"
+    framework: owasp_agentic
+    requirement: "T9 Identity Spoofing & Impersonation"
+    how: "Named-approver identity-group check with segregation of duties on the /route path."
+    coverage: partial
+
+  - control: "Risk"
+    framework: owasp_agentic
+    requirement: "T10 Overwhelming Human-in-the-Loop"
+    how: "Proportional controls gate only high-access/high-autonomy requests, so humans are not flooded with trivial approvals."
+    coverage: partial
+  - control: "Human gates"
+    framework: owasp_agentic
+    requirement: "T10 Overwhelming Human-in-the-Loop"
+    how: "Approval timeout = deny (fail-closed), so a swamped approver cannot be pressured into a rushed yes."
+    coverage: partial
+
+  - control: "Ethical walls"
+    framework: owasp_agentic
+    requirement: "T13 Rogue Agents in Multi-Agent Systems"
+    how: "Conflicting scopes are isolated to separate runners; no shared runner across an ethical wall."
+    coverage: partial
+  - control: "Kill switch + circuit breaker"
+    framework: owasp_agentic
+    requirement: "T13 Rogue Agents in Multi-Agent Systems"
+    how: "Operator halt can stop a global scope, a specific scope, or an ancestor subtree before dispatch."
+    coverage: partial
+
+  - control: "Injection/output guardrails"
+    framework: owasp_agentic
+    requirement: "T15 Human Manipulation"
+    how: "outputScan flags secret/exfil leakage in agent output before it reaches a human or an egress lane."
+    coverage: partial
+
+  # Pure gap — no owning control:
+  - control: "-"
+    framework: owasp_agentic
+    requirement: "T12 Agent Communication Poisoning"
+    how: "No message-integrity / signing between agents on the inter-agent (A2A) channel; relies on runner isolation only."
+    coverage: none
+
+  # ===================== NIST AI RMF =====================
+  - control: "Risk"
+    framework: nist_ai_rmf
+    requirement: "Govern: policies, processes & accountability for AI risk"
+    how: "Governance-as-code — risk/mode/RBAC policy in policy.json, enforced at one chokepoint and unit-tested (conformance_test.py)."
+    coverage: full
+  - control: "Operating mode"
+    framework: nist_ai_rmf
+    requirement: "Govern: policies, processes & accountability for AI risk"
+    how: "Per-scope operating mode sets the human/AI relationship deliberately per function."
+    coverage: full
+  - control: "AI use-case register"
+    framework: nist_ai_rmf
+    requirement: "Govern: maintain an inventory of AI systems/use cases"
+    how: "Derived conformity inventory of every scope's use case, owner, risk, mode, and status — cannot drift from enforcement."
+    coverage: full
+  - control: "Approver RBAC + SoD"
+    framework: nist_ai_rmf
+    requirement: "Govern: roles, responsibilities & accountability lines"
+    how: "identityGroup-based approver authorization with segregation of duties; use-case register names an accountable owner."
+    coverage: full
+  - control: "Kill switch + circuit breaker"
+    framework: nist_ai_rmf
+    requirement: "Govern: mechanisms to deactivate/decommission a system safely"
+    how: "Operator halt + automatic budget/rate breaker; offboarding removes a scope subtree and issues a deletion certificate."
+    coverage: full
+  - control: "Risk"
+    framework: nist_ai_rmf
+    requirement: "Govern: third-party / supply-chain (provider) risk"
+    how: "blockCrossVendor keeps confidential work on a single vendor; local-first stack avoids external data processors."
+    coverage: partial
+
+  - control: "AI use-case register"
+    framework: nist_ai_rmf
+    requirement: "Map: establish context & categorize the AI use case"
+    how: "Each scope records its use case, owner, level, and status; lanes capture cross-scope workflows."
+    coverage: full
+  - control: "Risk"
+    framework: nist_ai_rmf
+    requirement: "Map: identify & classify risks (likelihood/impact)"
+    how: "data x access x autonomy scoring derives a risk level per request; escalates to critical when >=2 dimensions max out."
+    coverage: full
+  - control: "Context scope"
+    framework: nist_ai_rmf
+    requirement: "Map: characterize potential impacts & blast radius"
+    how: "Scope tree + isolation define blast radius; the access dimension encodes act-vs-read impact."
+    coverage: partial
+
+  - control: "Kill switch + circuit breaker"
+    framework: nist_ai_rmf
+    requirement: "Measure: track effectiveness of controls & risk metrics"
+    how: "Conformance tests assert governance invariants hold; audit ledger records which controls fired per decision."
+    coverage: partial
+  - control: "Audit ledger"
+    framework: nist_ai_rmf
+    requirement: "Measure: track effectiveness of controls & risk metrics"
+    how: "Per-decision record of risk/verdict/controls is the measurement substrate (metadata only)."
+    coverage: partial
+  - control: "Injection/output guardrails"
+    framework: nist_ai_rmf
+    requirement: "Measure: robustness & adversarial / security testing"
+    how: "Heuristic input/output scans plus a security test suite and documented threat model."
+    coverage: partial
+  - control: "-"
+    framework: nist_ai_rmf
+    requirement: "Measure: ongoing evaluation of model quality / task-adherence over time (drift)"
+    how: "Not built — no continuous eval or drift monitoring (roadmap E2)."
+    coverage: none
+  - control: "-"
+    framework: nist_ai_rmf
+    requirement: "Measure: bias / fairness measurement of outputs"
+    how: "Not built — no bias or fairness testing harness."
+    coverage: none
+
+  - control: "Risk"
+    framework: nist_ai_rmf
+    requirement: "Manage: prioritize & respond to risks (proportional treatment)"
+    how: "Controls switch on per-dimension (verify/approval/isolation/no-cross-vendor) proportional to the score."
+    coverage: full
+  - control: "Human gates"
+    framework: nist_ai_rmf
+    requirement: "Manage: prioritize & respond to risks (proportional treatment)"
+    how: "Human approval on ship/promote/apply; timeout = deny."
+    coverage: full
+  - control: "Audit ledger"
+    framework: nist_ai_rmf
+    requirement: "Manage: incident response, forensics & recovery"
+    how: "Tamper-evident decision trail supports forensic reconstruction; kill switch halts an in-progress incident."
+    coverage: partial
+  - control: "-"
+    framework: nist_ai_rmf
+    requirement: "Manage: formal incident-reporting workflow to stakeholders/authorities"
+    how: "Not built — the ledger is a forensic substrate, but there is no incident-report generation or external notification."
+    coverage: none
+
+  # ===================== EU AI Act =====================
+  - control: "Risk"
+    framework: eu_ai_act
+    requirement: "Art 9: risk-management system across the lifecycle"
+    how: "Continuous, policy-driven risk scoring at the enforcement chokepoint with proportional controls; invariants regression-tested."
+    coverage: partial
+  - control: "PII"
+    framework: eu_ai_act
+    requirement: "Art 10: data governance (quality, minimization, protection)"
+    how: "PII tokenized on ingest; pii:block refuses raw PII in prompts; scope isolation limits data reach; retention ages data out."
+    coverage: partial
+  - control: "Context scope"
+    framework: eu_ai_act
+    requirement: "Art 10: data governance (quality, minimization, protection)"
+    how: "Least-context mounts enforce data minimization — an agent only sees its own scope's data."
+    coverage: partial
+  - control: "AI use-case register"
+    framework: eu_ai_act
+    requirement: "Art 11: technical documentation of the system"
+    how: "Derived use-case register + a documented control catalog, threat model, and risk model describe the system."
+    coverage: partial
+  - control: "Audit ledger"
+    framework: eu_ai_act
+    requirement: "Art 12: automatic record-keeping / logging & traceability"
+    how: "Append-only hash-chained ledger records every decision (metadata only); tamper-evident and re-walkable."
+    coverage: full
+  - control: "AI use-case register"
+    framework: eu_ai_act
+    requirement: "Art 13: transparency & information provided to deployers/users"
+    how: "Register + per-decision records make purpose, risk tier, owner, and operating mode legible; decision block returned per request."
+    coverage: partial
+  - control: "Human gates"
+    framework: eu_ai_act
+    requirement: "Art 14: human oversight"
+    how: "Human gates on irreversible acts; operating mode fixes who leads/validates; approver RBAC binds oversight to authorized identities."
+    coverage: full
+  - control: "Operating mode"
+    framework: eu_ai_act
+    requirement: "Art 14: human oversight"
+    how: "maxAction caps + humanValidation stamp implement 'human validates' vs 'human is the actor' per scope."
+    coverage: full
+  - control: "Injection/output guardrails"
+    framework: eu_ai_act
+    requirement: "Art 15: robustness & cybersecurity"
+    how: "Input/output guardrails, structural isolation, fail-closed firewall, and a security test suite address adversarial robustness."
+    coverage: partial
+  - control: "-"
+    framework: eu_ai_act
+    requirement: "Art 15: accuracy metrics & declared accuracy levels"
+    how: "Not built — no model accuracy measurement or declared accuracy metrics (relates to roadmap E2)."
+    coverage: none
+  - control: "Audit ledger"
+    framework: eu_ai_act
+    requirement: "Art 72-73: post-market monitoring & serious-incident reporting"
+    how: "Ledger provides the monitoring/forensic substrate, but there is no serious-incident report generation or reporting-to-authorities flow."
+    coverage: partial
+  - control: "Eval / drift lane"
+    framework: nist_ai_rmf
+    requirement: "Measure 2: AI performance/quality tracked and monitored over time"
+    how: "Agentic-leverage + verify-pass/change-failure/block metrics computed from the audit ledger, trended with drift flags (metadata proxy, not semantic eval)."
+    coverage: partial
+  - control: "Eval / drift lane"
+    framework: nist_ai_rmf
+    requirement: "Manage 4: monitored post-deployment; drift triggers review"
+    how: "Weekly eval lane emits drift WARNs to the Notify channel when key quality/risk metrics move beyond thresholds."
+    coverage: partial
+  - control: "Eval / drift lane"
+    framework: eu_ai_act
+    requirement: "Art 72: post-market monitoring of performance over the lifecycle"
+    how: "Continuous metrics from the ledger provide lifecycle performance monitoring; semantic/ground-truth accuracy eval remains a gap (G1)."
+    coverage: partial
+  - control: "Quality regression / improvement loop"
+    framework: nist_ai_rmf
+    requirement: "Measure 3: mechanisms to evaluate performance and catch regressions"
+    how: "Offline eval datasets replay captured production cases and grade output (exact/contains/regex/LLM-as-judge); a regression fails the run — the quality counterpart to conformance."
+    coverage: partial
+  - control: "Quality regression / improvement loop"
+    framework: nist_ai_rmf
+    requirement: "Manage 4: incidents & feedback drive continual improvement"
+    how: "A flagged production failure is captured as a persistent, PII-tokenized, per-scope eval case, so the fix is proven and the failure can't silently recur (governed observability)."
+    coverage: partial
+  - control: "Quality regression / improvement loop"
+    framework: eu_ai_act
+    requirement: "Art 15: accuracy & robustness validated and monitored over the lifecycle"
+    how: "Regression datasets validate agent output quality on real cases; semantic ground-truth coverage still depends on grader quality (gap G1)."
+    coverage: partial
+
+# ---------------------------------------------------------------------------
+# GAPS — the honest "does NOT yet cover" list, cross-referenced to the
+# MARKET-ANALYSIS.md E2/E3 roadmap and the THREAT-MODEL.md findings.
+# ---------------------------------------------------------------------------
+gaps:
+  - id: G1
+    title: "Continuous model evaluation, drift & task-adherence over time"
+    frameworks: ["NIST Measure", "EU Art 15", "OWASP T5 (partial)"]
+    roadmap: "E2 (Continuous eval + drift) — MARKET-ANALYSIS.md"
+    note: "Brightworks verifies governance invariants and runs a fresh-context verifier, but does not measure model output quality over time."
+  - id: G2
+    title: "Bias / fairness testing"
+    frameworks: ["NIST Measure", "EU Art 10/15"]
+    roadmap: "Not on the current E-list; backlog"
+    note: "No fairness or bias-evaluation harness for agent outputs."
+  - id: G3
+    title: "Model cards / full technical-documentation file (e.g. EU Annex IV)"
+    frameworks: ["EU Art 11", "NIST Map"]
+    roadmap: "Backlog (compliance-evidence exporter)"
+    note: "Use-case register + docs partially cover this; there are no per-model model cards."
+  - id: G4
+    title: "Serious-incident reporting to stakeholders/authorities"
+    frameworks: ["EU Art 72-73", "NIST Manage"]
+    roadmap: "Backlog (compliance-evidence exporter — GDPR/HIPAA/SR 11-7 packs)"
+    note: "Audit ledger is a forensic substrate only; no incident-report generation or external notification workflow."
+  - id: G5
+    title: "ML-based injection / PII detection (heuristic + regex only today)"
+    frameworks: ["OWASP T1/T6/T15", "EU Art 10/15"]
+    roadmap: "E3 (ML-based injection/PII detection) — MARKET-ANALYSIS.md; threat-model M2, H3"
+    note: "inputScan/outputScan are heuristic; PII detection is US-only regex (no NER, no Luhn)."
+  - id: G6
+    title: "Runtime resource limits (CPU/mem/pids)"
+    frameworks: ["OWASP T4"]
+    roadmap: "Threat-model M7"
+    note: "Circuit breaker caps request rate/budget, but a single request can still exhaust host resources."
+  - id: G7
+    title: "Authenticated approval ingress / strong approver identity"
+    frameworks: ["OWASP T9", "EU Art 14"]
+    roadmap: "Threat-model M5 (identity capture) — RBAC.md"
+    note: "Router-side RBAC + SoD is enforced, but the approval link is still an unauthenticated bearer capability."
+  - id: G8
+    title: "Structural pool-mode isolation"
+    frameworks: ["OWASP T1/T3/T13", "EU Art 10"]
+    roadmap: "Threat-model C1 — ISOLATION-FIX-PLAN.md"
+    note: "Isolation is structural in silo mode but advisory (cwd only) in pool mode until per-scope runners are cut over."
