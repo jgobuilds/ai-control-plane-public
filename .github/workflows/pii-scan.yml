@@ -26,7 +26,7 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -98,7 +98,7 @@ jobs:
     steps:
       # The notify job runs on a fresh runner, so the diagnostician's own source
       # and its known-cause table have to be checked out before it can run.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
