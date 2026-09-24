@@ -1,0 +1,7 @@
+{
+  "_comment": "RUNTIME STATE — the real control/halt.json is gitignored; this .example only documents the shape. Operators flip it with scripts/halt.py (do NOT hand-edit in prod). global:true halts ALL requests; scopes[] halts each listed scope AND every descendant (the router matches the request's full scope chain). reason/ts are set by halt.py for the audit trail.",
+  "global": false,
+  "scopes": [],
+  "reason": "",
+  "ts": ""
+}

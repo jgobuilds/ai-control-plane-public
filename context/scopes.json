@@ -1,0 +1,34 @@
+{
+  "_sample_data": "EVERY value below is ILLUSTRATIVE — the scope names, owners, use cases and statuses describe no real deployment, team or engagement. Owners use @example.com (RFC 2606) so they cannot be mistaken for people: an invented but realistic name is indistinguishable from a real one to a reader, a search engine, and whoever happens to share it. Enforced by ai-standards/scripts/check_example_names.py. Replace all of it with your own.",
+
+  "_comment": "Configurable context-scope registry. Levels are YOURS to define — rename, add, or remove them (consulting: enterprise>tenant>engagement; corp: enterprise>department>team>personal). The scope tree maps 1:1 to directories under workspace/<workspaceRoot>/, so an agent run 'at' a node sees that node's dir plus every ancestor's (Claude Code loads CLAUDE.md upward) — inheritance is structural. Siblings are invisible. The router enforces everything else in this file.",
+
+  "levels": ["enterprise", "department", "team", "personal"],
+  "workspaceRoot": "scopes",
+  "defaultScope": "enterprise",
+
+  "levelDefaults": {
+    "_comment": "Controls applied to every node of a level unless the node overrides. pii: off|warn|block (outbound prompt guard). isolation: pool (shared runner, cwd-scoped) | silo (dedicated runner required). promotion: review = content moves UP a level only after scrub+generalize+human review. identityGroup: who may invoke this scope (maps to a Google Group). retentionDays: null = keep. allowedTools (optional, per-node): array of Claude Code tool names (e.g. [\"Read\",\"Grep\",\"Edit\",\"Bash\"]) the router passes to the runner as --allowedTools; UNLISTED tools are effectively denied — defence-in-depth on top of the firewall/mounts. Omit to allow the runner's defaults. See GUARDRAILS.md.",
+    "enterprise": { "pii": "block", "isolation": "pool", "promotion": "review", "identityGroup": "agents-all@example.com", "retentionDays": null },
+    "department": { "pii": "block", "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": null },
+    "team":       { "pii": "warn",  "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": null },
+    "personal":   { "pii": "warn",  "isolation": "pool", "promotion": "review", "identityGroup": null, "retentionDays": 90 }
+  },
+
+  "nodes": {
+    "enterprise":  { "level": "enterprise", "parent": null },
+
+    "consulting":  { "level": "department", "parent": "enterprise", "identityGroup": "agents-consulting@example.com" },
+    "tenant-a":    { "level": "team", "parent": "consulting", "controls": { "pii": "block", "isolation": "silo", "mode": "ai-led", "allowedTools": ["Read", "Grep", "Edit", "Bash"], "operations": { "publish-deliverable": { "access": "write", "irreversible": true, "tools": ["Read", "Edit"] }, "review-deliverable": { "access": "read", "tools": ["Read", "Grep"] } } }, "runnerHost": "claude-runner-tenant-a", "owner": "owner-tenant-a@example.com", "useCase": "Tenant-A advisory & code-delivery agent (transcripts → deliverables)", "status": "in-production", "agentName": "Ada the Advisor" },
+    "tenant-b":    { "level": "team", "parent": "consulting", "controls": { "pii": "block", "isolation": "silo" }, "runnerHost": "claude-runner-tenant-b" },
+
+    "engineering": { "level": "department", "parent": "enterprise" },
+    "data-team":   { "level": "team", "parent": "engineering", "owner": "owner-data-team@example.com", "useCase": "Data-pipeline maintenance & analytics assistant", "status": "approved", "agentName": "Dana the Data-analyst" },
+    "jane":        { "level": "personal", "parent": "data-team" }
+  },
+
+  "conflicts": {
+    "_comment": "Ethical walls. Listed pairs must NEVER share a pooled runner — the router refuses pool dispatch for them (silo + runnerHost required).",
+    "pairs": [["tenant-a", "tenant-b"]]
+  }
+}

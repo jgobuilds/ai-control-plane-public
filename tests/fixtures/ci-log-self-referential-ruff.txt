@@ -1,0 +1,37 @@
+# The shape of ai-control-plane runs 30855032473 and 30828947680 (2026-08-03),
+# both signed "vendored file fails the linter" and neither of them that. The
+# real failure is the FAILED line at the bottom; ruff was never run in this job
+# at all. The cause table matched the test that tests the cause table:
+# "PASS  clean ruff check claims no cause" supplied the word `ruff` and
+# "False positives found in the wild" supplied `Found `, on lines 40 apart.
+#
+# Trimmed to the colliding region. Keep the PASS lines verbatim — they are the
+# evidence, and rewording them is how the regression comes back.
+
+2026-08-03T14:02:11.4410221Z == tests/ci_diagnose_test.py ==
+2026-08-03T14:02:11.5512033Z Known causes match deterministically (no model needed):
+2026-08-03T14:02:11.5513880Z   PASS  cross-repo-link-not-in-ci
+2026-08-03T14:02:11.5514402Z   PASS  vendored-file-reformatted
+2026-08-03T14:02:11.5514901Z   PASS  vendored-file-fails-the-linter
+2026-08-03T14:02:11.5515377Z   PASS  docker-from-trailing-comment
+2026-08-03T14:02:11.5515820Z   PASS  action-version-does-not-exist
+2026-08-03T14:02:11.5516302Z
+2026-08-03T14:02:11.5516773Z False positives found in the wild are permanent cases:
+2026-08-03T14:02:11.5517291Z   PASS  a PASSING check is not diagnosed as a failure
+2026-08-03T14:02:11.5517780Z   PASS  but the real FAILURE line still matches
+2026-08-03T14:02:11.5518254Z   PASS  without same_line, that passing run WOULD have matched
+2026-08-03T14:02:11.5518719Z
+2026-08-03T14:02:11.5519180Z A CLEAN run of the same tool must diagnose nothing:
+2026-08-03T14:02:11.5519644Z   PASS  clean ruff check claims no cause
+2026-08-03T14:02:11.5520101Z   PASS  clean ruff format claims no cause
+2026-08-03T14:02:11.5520560Z
+2026-08-03T14:02:11.5521022Z A near-miss must NOT claim a match:
+2026-08-03T14:02:11.5521500Z   PASS  'gitleaks not installed' is the normal case, not the stale-bridge bug
+2026-08-03T14:02:11.5521998Z   PASS  but 'built-in only' WITHOUT that phrase does match the stale bridge
+2026-08-03T14:02:11.5522461Z
+2026-08-03T14:02:11.5522920Z The excerpt ranks real failures above our own PASS output:
+2026-08-03T14:02:11.5523398Z   FAIL  the excerpt stays short enough to read — 7
+2026-08-03T14:02:11.5523861Z
+2026-08-03T14:02:11.5524320Z FAILED: 1 check(s)
+2026-08-03T14:02:11.5524783Z   - the excerpt stays short enough to read
+2026-08-03T14:02:11.5525240Z ##[error]Process completed with exit code 1.

@@ -1,0 +1,432 @@
+{
+  "id": "aicp-ask-webhook",
+  "name": "Ask a human (HTTP door for the runner)",
+  "settings": {
+    "errorWorkflow": "aicp-error-trigger"
+  },
+  "nodes": [
+    {
+      "id": "hook",
+      "name": "POST /ask-human",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        240
+      ],
+      "webhookId": "b1a7f6c2-3d84-4e91-9c05-7f2ab6d81e30",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ask-human",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "auth",
+      "name": "Authenticate + validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        240
+      ],
+      "parameters": {
+        "jsCode": "// FAIL CLOSED on the token. This endpoint blocks an agent run and pages a human,\n// so an unauthenticated caller on the docker network could spend a person's\n// attention on demand.\n//\n// This node returns a VERDICT, it does not throw. The webhook answers with the\n// verdict's status (responseMode \"responseNode\"), so the CALLER learns whether it\n// was let in. It used to throw here behind an onReceived webhook that had\n// already answered 200 \"Workflow was started\" to everyone: a wrong token, the\n// runners' own token and no token all got 200, and only n8n's log knew. The seam\n// heartbeat could not tell a locked door from an open one, and ask-human-mcp told\n// an unauthorised agent its question had been raised. A refusal still raises the\n// alarm: \"Raise the alarm\" throws after the refusal is answered.\n//\n//   401  missing or wrong x-ask-human-token\n//   503  n8n itself has no ASK_HUMAN_TOKEN, so it refuses everything\n//   400  authenticated, but the request is not one we can act on\n//   200  authenticated liveness probe (asks nobody)\n//   202  authenticated question, accepted; a human is being asked\nconst req = $input.first().json || {};\nconst headers = req.headers || {};\nconst want = $env.ASK_HUMAN_TOKEN || '';\nconst got = headers['x-ask-human-token'] || headers['X-Ask-Human-Token'] || '';\nconst refuse = (status, reason) => [{ json: { status, ok: false, reason } }];\n\nif (!want) {\n  return refuse(503, 'ask-webhook: ASK_HUMAN_TOKEN is not set in n8n — refusing to serve an unauthenticated question endpoint.');\n}\nif (!got || got !== want) {\n  return refuse(401, 'ask-webhook: bad or missing x-ask-human-token');\n}\n\nconst b = req.body || {};\n\n// LIVENESS PROBE. `{ \"healthcheck\": true }` returns without asking anyone\n// anything. It exists because the only way to prove this door is OPEN is to\n// knock on it, and a probe that pages a human every 15 minutes is worse than no\n// probe at all.\n//\n// AUTH IS CHECKED FIRST, above, deliberately. A healthcheck branch that skipped\n// the token would hand anything on the docker network a free way to confirm this\n// endpoint exists — reconnaissance on the one seam that spends human attention.\n//\n// It also succeeds CLEANLY rather than throwing: a failed execution trips the\n// Global Error Handler, so a probe built on a deliberate error would alert on\n// every run and teach everyone to ignore the alert.\nif (b.healthcheck === true) {\n  return [{ json: { status: 200, ok: true, healthcheck: true } }];\n}\n\nconst question = (b.question || '').trim();\nif (!question) {\n  return refuse(400, 'ask-webhook: `question` is required — refusing to ask a human nothing.');\n}\n\n// The ticket is a KEY, and keys from callers deserve an allowlist rather than a\n// sanitiser. UUID or nothing.\nconst ticket = String(b.ticket || '').trim();\nif (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(ticket)) {\n  return refuse(400, 'ask-webhook: `ticket` must be a UUID.');\n}\n\n// Bound the wait: the agent is blocked while this runs.\nconst MAX_MIN = 10;\nconst minutes = Math.min(Number(b.timeoutMinutes) > 0 ? Number(b.timeoutMinutes) : MAX_MIN, MAX_MIN);\n\nreturn [{ json: {\n  status: 202, ok: true, healthcheck: false,\n  ticket, question,\n  context: b.context || '',\n  source: b.source || 'agent',\n  timeoutHours: minutes / 60,\n} }];"
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Start Slack watch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        380
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "=http://lanes:8081/slack-ask",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ticket",
+              "value": "={{ $json.ticket }}"
+            },
+            {
+              "name": "question",
+              "value": "={{ $json.question }}"
+            },
+            {
+              "name": "context",
+              "value": "={{ $json.context }}"
+            },
+            {
+              "name": "minutes",
+              "value": "={{ Math.round($json.timeoutHours * 60) }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lanes-token",
+              "value": "={{ $env.LANES_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      }
+    },
+    {
+      "id": "ask",
+      "name": "Ask the human",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        240
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-ask-question",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "question": "={{ $json.question }}",
+            "context": "={{ $json.context }}",
+            "source": "={{ $json.source }}",
+            "timeoutHours": "={{ $json.timeoutHours }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "question",
+              "displayName": "question",
+              "type": "string",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "context",
+              "displayName": "context",
+              "type": "string",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timeoutHours",
+              "displayName": "timeoutHours",
+              "type": "number",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "name": "Shape answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1530,
+        240
+      ],
+      "parameters": {
+        "jsCode": "// Shape the answer for delivery. `answered` stays separate from `answer` all the\n// way to the agent: \"nobody answered\" and \"answered with nothing\" are different\n// facts, and a caller that cannot tell them apart treats silence as data.\nconst a = $input.first().json || {};\nconst t = $('Authenticate + validate').first().json || {};\nreturn [{ json: {\n  ticket: t.ticket,\n  provider: 'claude',\n  answered: a.answered === true,\n  answer: a.answer || '',\n  timedOut: a.timedOut === true,\n  note: a.note || '',\n} }];"
+      }
+    },
+    {
+      "id": "deliver",
+      "name": "Deliver via router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://router:8080/ask/answer",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-router-token",
+              "value": "={{ $env.ROUTER_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "name": "Healthcheck?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        840,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "hc",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.healthcheck }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "refused",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              },
+              "leftValue": "={{ $json.status }}",
+              "rightValue": 400
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Refused?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, status: $json.status, error: $json.reason }) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "name": "Answer refusal",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        840,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The refusal has already been ANSWERED (so the caller sees 4xx/5xx). Throwing\n// now hands the reason to the Global Error Handler, which is how a wrong or\n// missing token has always been reported. Making the status visible must not\n// quietly drop that signal: an unknown caller knocking on the door that pages a\n// human is worth knowing about.\nconst v = $input.first().json || {};\nthrow new Error(v.reason || `ask-webhook: refused with HTTP ${v.status}`);"
+      },
+      "name": "Raise the alarm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, healthcheck: true }) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "name": "Answer probe",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1060,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, accepted: true, ticket: $json.ticket }) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "name": "Answer accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1060,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "POST /ask-human": {
+      "main": [
+        [
+          {
+            "node": "Authenticate + validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authenticate + validate": {
+      "main": [
+        [
+          {
+            "node": "Refused?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask the human": {
+      "main": [
+        [
+          {
+            "node": "Shape answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape answer": {
+      "main": [
+        [
+          {
+            "node": "Deliver via router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Healthcheck?": {
+      "main": [
+        [
+          {
+            "node": "Answer probe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Answer accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refused?": {
+      "main": [
+        [
+          {
+            "node": "Answer refusal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Healthcheck?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer refusal": {
+      "main": [
+        [
+          {
+            "node": "Raise the alarm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer accepted": {
+      "main": [
+        [
+          {
+            "node": "Start Slack watch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ask the human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "description": "HTTP door for a runner to raise a question mid-run. Responds immediately, starts a Slack thread watch alongside the form, and hands the answer back through the router rather than straight to a runner."
+  }
+}

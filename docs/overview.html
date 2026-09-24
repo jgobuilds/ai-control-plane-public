@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Hand-written overview, dated in the header. Source of truth for the
+     published page: edit here, not in any copy. Listed in site.manifest. -->
+<title>Control Plane and Lenses</title>
+<style>
+:root{
+  --bg:#F5F6F3; --surface:#FFFFFF; --ink:#1B2320; --ink-strong:#0E1412; --muted:#5A6560;
+  --line:#D8DDD7; --accent:#1F6B58; --accent-soft:#E3EFEA; --stop:#A34E1C; --stop-soft:#F6E9DF;
+  --code-bg:#ECEFEA;
+  --f-head:"Aptos Display","Segoe UI Semibold","Helvetica Neue",system-ui,sans-serif;
+  --f-body:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --f-mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#101513; --surface:#161D1A; --ink:#DCE4DF; --ink-strong:#F2F6F3; --muted:#93A09A;
+    --line:#2A3430; --accent:#62C2A5; --accent-soft:#17302A; --stop:#E29462; --stop-soft:#35241A;
+    --code-bg:#1C2421;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#101513; --surface:#161D1A; --ink:#DCE4DF; --ink-strong:#F2F6F3; --muted:#93A09A;
+  --line:#2A3430; --accent:#62C2A5; --accent-soft:#17302A; --stop:#E29462; --stop-soft:#35241A;
+  --code-bg:#1C2421;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--f-body);padding-inline:20px;padding-block:0 64px}
+.wrap{max-width:760px;margin:0 auto}
+header{padding-block:48px 28px;border-bottom:1px solid var(--line)}
+.eyebrow{font:500 12px/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:600 clamp(2rem,5vw,2.8rem)/1.08 var(--f-head);color:var(--ink-strong);margin:12px 0 14px;text-wrap:balance;letter-spacing:-.01em}
+.lede{font-size:1.125rem;color:var(--ink);max-width:62ch;margin:0}
+.meta{margin-top:18px;font:13px/1.5 var(--f-mono);color:var(--muted)}
+nav.toc{display:flex;flex-wrap:wrap;gap:8px 20px;padding-block:16px;border-bottom:1px solid var(--line);font:500 14px var(--f-body)}
+nav.toc a{color:var(--muted);text-decoration:none}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--accent);text-decoration:underline}
+h2{font:600 1.7rem/1.15 var(--f-head);color:var(--ink-strong);margin:56px 0 10px;text-wrap:balance}
+h3{font:600 1.15rem/1.3 var(--f-head);color:var(--ink-strong);margin:32px 0 8px;letter-spacing:.005em}
+p{margin:0 0 14px;max-width:66ch}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code{font:0.88em var(--f-mono);background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{font:13.5px/1.55 var(--f-mono);background:var(--code-bg);padding:14px 16px;border-radius:6px;overflow-x:auto;margin:0 0 16px}
+pre code{background:none;padding:0}
+strong{color:var(--ink-strong);font-weight:600}
+
+/* request path: a real sequence, so numbered */
+ol.path{list-style:none;padding:0;margin:20px 0 8px;counter-reset:s;display:grid;gap:0}
+ol.path li{counter-increment:s;display:grid;grid-template-columns:44px 1fr;gap:14px;position:relative;padding-bottom:18px}
+ol.path li::before{content:counter(s);font:600 15px/1 var(--f-mono);color:var(--accent);width:32px;height:32px;border:1.5px solid var(--accent);border-radius:50%;display:grid;place-items:center;background:var(--bg);z-index:1}
+ol.path li:not(:last-child)::after{content:"";position:absolute;left:16px;top:32px;bottom:0;border-left:1.5px dashed var(--line)}
+ol.path .step{font:600 1rem/1.3 var(--f-head);color:var(--ink-strong);display:block;margin:5px 0 3px;letter-spacing:.01em}
+ol.path p{margin:0;font-size:.97rem}
+
+.rules{display:grid;gap:0;margin:18px 0;border-top:1px solid var(--line)}
+.rules div{display:grid;grid-template-columns:minmax(0,15rem) 1fr;gap:6px 22px;padding:14px 0;border-bottom:1px solid var(--line)}
+.rules dt{font:600 .98rem/1.35 var(--f-head);color:var(--ink-strong)}
+.rules dd{margin:0;font-size:.95rem;color:var(--ink)}
+@media (max-width:600px){.rules div{grid-template-columns:1fr}}
+
+.callout{background:var(--stop-soft);border-left:3px solid var(--stop);padding:14px 18px;border-radius:0 6px 6px 0;margin:20px 0}
+.callout p{margin:0}
+.callout .tag{font:500 11px/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--stop);display:block;margin-bottom:6px}
+
+/* lens anatomy */
+.lens{background:var(--surface);border:1px solid var(--line);border-radius:8px;margin:20px 0;overflow:hidden}
+.lens-head{padding:10px 16px;border-bottom:1px solid var(--line);font:500 12.5px var(--f-mono);color:var(--muted);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.lens-row{display:grid;grid-template-columns:84px 1fr;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.lens-row:last-child{border-bottom:0}
+.lens-row b{font:600 12px/1.9 var(--f-mono);letter-spacing:.07em;text-transform:uppercase}
+.lens-row.risk b{color:var(--stop)}
+.lens-row.check b,.lens-row.fix b{color:var(--accent)}
+.lens-row span{font-size:.96rem}
+
+/* precedence stack */
+.stack{margin:18px 0;display:grid;gap:6px}
+.layer{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;align-items:baseline;padding:12px 16px;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+.layer:first-child{border-color:var(--accent);background:var(--accent-soft)}
+.layer .rank{font:500 12px var(--f-mono);color:var(--muted);grid-row:span 2}
+.layer strong{font-family:var(--f-head);font-size:1.02rem}
+.layer span{font-size:.93rem;color:var(--ink)}
+.stack-note{font:13px var(--f-mono);color:var(--muted);margin:-6px 0 18px}
+
+/* lens catalogue */
+.cat{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:18px 24px;margin:18px 0}
+.cat h4{font:600 12px/1 var(--f-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:13px/1 var(--f-mono);padding:6px 8px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink)}
+.chip.bind{border-color:var(--stop);color:var(--stop)}
+
+.tbl{overflow-x:auto;margin:16px 0 20px}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:.93rem}
+th,td{text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+td:first-child{font-family:var(--f-mono);font-size:.86rem;white-space:nowrap;color:var(--ink-strong)}
+
+.status{display:grid;gap:0;margin:16px 0;border-top:1px solid var(--line)}
+.status div{display:grid;grid-template-columns:8.5rem 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:.95rem}
+.pill{font:500 11.5px/1 var(--f-mono);padding:5px 7px;border-radius:999px;justify-self:start;align-self:start;white-space:nowrap}
+.pill.on{background:var(--accent-soft);color:var(--accent)}
+.pill.gap{background:var(--stop-soft);color:var(--stop)}
+footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);font:13px/1.6 var(--f-mono);color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+html{scroll-behavior:smooth}
+</style>
+</head><body>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">ai-control-plane · ai-standards</div>
+  <h1>The AI Control Plane, and the lenses that review it</h1>
+  <p class="lede">A governance layer for agent work: work enters through one router, splits across cost tiers and isolated scopes, and leaves only through verified exits that a human signs off. The goal is to hand agents real work and still be able to say what they did, why, and for whom.</p>
+  <div class="meta">Summary as of 2026-09-24 · AGPL-3.0-or-later · under active construction</div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#path">How work flows</a>
+  <a href="#rules">Operating rules</a>
+  <a href="#layout">Repo layout</a>
+  <a href="#lenses">How lenses work</a>
+  <a href="#maturity">Maturity &amp; ramp</a>
+  <a href="#status">What runs today</a>
+  <a href="#private">What stays private</a>
+</nav>
+
+<h2 id="path">How work flows</h2>
+<p>One path, in order. Each step is a place policy lives, and none of them can be skipped: <strong>only the router can reach a runner.</strong></p>
+<ol class="path">
+  <li><div><span class="step">Entry through n8n</span><p>Schedules, triggers and approval gates. n8n calls <code>POST /route</code> on the router and nothing else.</p></div></li>
+  <li><div><span class="step">Deterministic first</span><p>Well-defined tasks are answered by rules in <code>router/rules.js</code> with no model call. A model is the fallback, not the default.</p></div></li>
+  <li><div><span class="step">Cheapest model that can do the job</span><p>Each task type maps to a tier. A hard <code>maxTier</code> cap blocks frontier-model spend in automated lanes unless a call explicitly opts in.</p></div></li>
+  <li><div><span class="step">Action binding</span><p>The router decides which verb a task may perform, from a named list per scope (for example “invoice the customer”). The task’s own claim doesn’t count. Irreversible actions at high risk force human approval, which gives segregation of duties.</p></div></li>
+  <li><div><span class="step">Firewalled runners</span><p>Each runner reaches only its own vendor and shells out to that vendor’s CLI (<code>claude -p</code>, <code>gemini -p</code>). Its tools are narrowed to what the bound action needs. The PII vault stays in the scrubber and is never mounted into a runner.</p></div></li>
+  <li><div><span class="step">Hash-chained ledger</span><p>Every decision is appended with tier, model, reason, cost, declared action and bound tools. No path acts without leaving a record.</p></div></li>
+  <li><div><span class="step">Gated exit</span><p>Deliverables leave only through human-gated steps. Cross-checks run the reviewer on the <em>other</em> vendor.</p></div></li>
+</ol>
+
+<div class="callout">
+  <span class="tag">Cost, stated plainly</span>
+  <p>Since 2026-06-15, headless <code>claude -p</code> on a Claude subscription draws on a per-user monthly Agent SDK credit ($20 Pro · $100 Max 5x · $200 Max 20x) at standard API rates, not on plan usage limits. When the credit runs out, requests <strong>stop</strong> unless usage credits are enabled. Unattended work is a capped cost line, not a free entitlement. The design doesn’t depend on it: the router picks the tier, so a change in vendor terms moves the cost, not the architecture.</p>
+</div>
+
+<h2 id="rules">Operating rules</h2>
+<p>These hold across the codebase, and each one is enforced by a check rather than just written down.</p>
+<dl class="rules">
+  <div><dt>A control isn’t enforced until you’ve watched it fail</dt><dd>Every gate is broken on purpose before it’s trusted. “Inconclusive” is never a pass.</dd></div>
+  <div><dt>A failure that happens twice is a harness bug</dt><dd>CI failures are matched against a list of known causes before any model is asked. A new diagnosis becomes a new known cause, and repeats are counted in <code>reliability/recurrence.yaml</code>.</dd></div>
+  <div><dt>Quote it or don’t claim it</dt><dd>Sources are saved to a file and quoted by line number. “Could not confirm” is a valid finding. A claim that has been retracted is registered, and CI fails if it reappears.</dd></div>
+  <div><dt>Decisions get an ADR</dt><dd>19 so far. Each keeps the options that lost, plus a Cost column that CI checks for.</dd></div>
+  <div><dt>Pins move by policy</dt><dd>Every image and agent CLI is pinned. Version updates wait 7 days, security fixes don’t wait, and an eligible upgrade must be taken within 30 days. Deploys go to one canary runner first, then observe, then promote.</dd></div>
+</dl>
+
+<h2 id="layout">Repo layout</h2>
+<dl class="rules">
+  <div><dt><code>ai-control-plane</code></dt><dd>The runtime: router, runners, scrubber, lanes, ledger. AGPL, brand-neutral, headed for public release. A hygiene gate stops org identity from leaking in.</dd></div>
+  <div><dt><code>&lt;org&gt;-instance</code></dt><dd>A private overlay with the real org identity, scope tree and context. It’s synced into the runtime at deploy time and never committed to it.</dd></div>
+  <div><dt><code>ai-standards</code></dt><dd>The shared rulebook: <code>AGENTS.md</code> with generated pointers for each agent tool, the PII gates, and the review lenses described below.</dd></div>
+</dl>
+
+<h2 id="lenses">How lenses work</h2>
+<p>A <strong>lens</strong> is one review angle, written as a short markdown reference in <code>ai-standards/references/</code>. Each lens is a list of rules, and every rule has the same three parts. The failure behind it is named, because a rule with no real failure behind it gets argued with.</p>
+
+<div class="lens" role="figure" aria-label="Example rule from the change-safety lens">
+  <div class="lens-head"><span>change-safety.md</span><span>Verify the outcome</span></div>
+  <div class="lens-row risk"><b>Risk</b><span>Reporting “pushed” from the command that ran, not the state it left behind. A multi-file <code>git add</code> once failed on a missing file, nothing was staged, and five repos were reported as pushed while showing the old hash.</span></div>
+  <div class="lens-row check"><b>Check</b><span>After any state change, confirm the state: HEAD moved and <code>git status</code> is clean; <code>origin/main..HEAD</code> is empty; the deleted thing is gone and nothing still references it.</span></div>
+  <div class="lens-row fix"><b>Fix</b><span>Confirm the resulting state, then report it. “I ran X” and “X happened” are different claims.</span></div>
+</div>
+
+<h3>Wiring a repo to lenses</h3>
+<p>Each repo lists the lenses it wants. When the <code>engineering-standard</code> skill reviews that repo, it loads only the lenses named here, reading each one as needed rather than all at once. Every finding must give file:line, what, why it matters, and the fix. A finding without a fix is just a complaint.</p>
+<pre><code># .engineering-standard/config.yml
+overlay: ../ai-standards
+lenses: [pragmatic-principles, design-patterns, code-smells,
+         change-safety, proving-controls, cost-awareness, ...]</code></pre>
+
+<h3>Three layers, highest wins</h3>
+<div class="stack">
+  <div class="layer"><span class="rank">1</span><strong>Repo profile</strong><span><code>.engineering-standard/profile.md</code> records the stack, known hotspots and past findings, and grows with each review.</span></div>
+  <div class="layer"><span class="rank">2</span><strong>Org overlay</strong><span><code>ai-standards</code>, or a company’s own lens folder. House rules that survive upgrades to the skill.</span></div>
+  <div class="layer"><span class="rank">3</span><strong>Base skill</strong><span>Generic lenses: Pragmatic Programmer principles, design patterns, code smells, language checks.</span></div>
+</div>
+<p class="stack-note">A skill upgrade never overwrites a house rule.</p>
+
+<h3>The lenses today</h3>
+<div class="cat">
+  <div><h4>Operating discipline</h4><div class="chips"><span class="chip">change-safety</span><span class="chip">environment-hygiene</span><span class="chip">concurrency-and-branching</span></div></div>
+  <div><h4>Evidence &amp; controls</h4><div class="chips"><span class="chip">proving-controls</span><span class="chip">evidence-standard</span></div></div>
+  <div><h4>Agent design</h4><div class="chips"><span class="chip">agent-context-architecture</span><span class="chip">diagnosability</span><span class="chip">notification-taxonomy</span></div></div>
+  <div><h4>Economics</h4><div class="chips"><span class="chip">cost-awareness</span><span class="chip">build-vs-adopt</span></div></div>
+  <div><h4>Supply chain</h4><div class="chips"><span class="chip">dependency-security</span></div></div>
+  <div><h4>Publishing</h4><div class="chips"><span class="chip bind" title="Not optional in any repo">pii-controls · required</span><span class="chip">crawler-policy</span><span class="chip">generated-artifacts</span></div></div>
+</div>
+
+<h3>Adding a house lens</h3>
+<p>Ask: <em>what review comment do I keep making?</em> That comment is a lens. Write it as risk → check → fix with a real failure named, and say whether it’s <strong>binding</strong> or <strong>advisory</strong>, because an agent can’t tell from tone.</p>
+
+<h3>From lens to gate</h3>
+<p>A lens is judgment that gets applied at review time. Once a rule is mechanical enough, it gets promoted to a script and a CI check, and from then on it’s enforced rather than just advised.</p>
+<div class="tbl">
+<table>
+  <thead><tr><th>Lens</th><th>Became</th></tr></thead>
+  <tbody>
+    <tr><td>dependency-security</td><td>Pin checks (<code>image:tag@sha256</code>), a 7-day Dependabot wait, a weekly job that flags stale pins, and a daily scan of the images the stack actually runs</td></tr>
+    <tr><td>cost-awareness</td><td>The Cost column required in every ADR options table (<code>adr_check.py</code>)</td></tr>
+    <tr><td>pii-controls</td><td>Commit gate, commit-message gate and CI scan in every repo</td></tr>
+    <tr><td>proving-controls</td><td>Mutation tests next to each gate; tool-restriction probes that decide from the CLI’s own tool list</td></tr>
+    <tr><td>evidence-standard</td><td><code>fetch_source.py</code> quote-by-line, and the retracted-claims check</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>A limit worth stating:</strong> <code>overlay:</code> is a filesystem path, so it only resolves where <code>ai-standards</code> sits next to the repo on disk. That’s why each repo’s own <code>AGENTS.md</code> still has to carry everything a contributor needs.</p>
+
+<h2 id="maturity">Maturity and ramp</h2>
+<p><strong>Self-assessed on 2026-09-24, against our own scale.</strong> Nobody outside the project has reviewed it. Each level is a claim about evidence, not about effort, and the full table with the command behind every row is in <code>docs/design/MATURITY.md</code>.</p>
+<div class="stack">
+  <div class="layer"><span class="rank">1</span><strong>Ad hoc</strong><span>Nothing written, nothing enforced.</span></div>
+  <div class="layer"><span class="rank">2</span><strong>Documented</strong><span>Written down and followed by habit. Nothing fails when it is violated.</span></div>
+  <div class="layer"><span class="rank">3</span><strong>Enforced</strong><span>A check fails on violation. Nobody has confirmed the check can fail.</span></div>
+  <div class="layer"><span class="rank">4</span><strong>Proven</strong><span>The check has been watched failing on purpose, and the proof re-runs automatically.</span></div>
+  <div class="layer"><span class="rank">5</span><strong>Proven at scale</strong><span>Sustained evidence from real volume, plus outside review. Deliberately out of reach here.</span></div>
+</div>
+<p class="stack-note">Overall: <strong>enforced, thinly exercised</strong> — real controls, little traffic.</p>
+<div class="tbl">
+<table>
+  <thead><tr><th>Dimension</th><th>Level</th><th>Why not higher</th></tr></thead>
+  <tbody>
+    <tr><td>Policy at one chokepoint</td><td><strong>4</strong></td><td>Tools are bound to a request’s governing verb, and the CLI flag behind it was probed live and watched refusing — but almost no bound traffic has flowed yet.</td></tr>
+    <tr><td>Auditability</td><td><strong>4</strong></td><td>Hash-chained ledger, verified before use; ~100 decisions total, so a tamper test proves less than it would at scale.</td></tr>
+    <tr><td>Supply chain &amp; change safety</td><td><strong>4</strong></td><td>Pins, release-age and staleness rules, daily scans of the images we build, canary deploys. Each gate watched failing; the deploy path has run few times.</td></tr>
+    <tr><td>Isolation &amp; data protection</td><td><strong>3</strong></td><td>Scope isolation and the PII vault are tested, but the retention sweep still deletes nothing.</td></tr>
+    <tr><td>Reliability &amp; diagnosability</td><td><strong>3</strong></td><td>Recurrence register with proofs the gate re-runs; behaviour under sustained failure untested.</td></tr>
+    <tr><td>Cost governance</td><td><strong>3</strong></td><td>Tier ceiling enforced and cost required in every decision record; the spend data is too thin to judge the tier mix.</td></tr>
+    <tr><td>Compliance evidence</td><td><strong>3</strong></td><td>Framework map generated from the enforced config, honestly mostly “partial”, and self-rated.</td></tr>
+    <tr><td>Security posture</td><td><strong>3</strong></td><td>22 tracked findings: 11 closed with proofs, 5 partial, 5 open, 1 accepted.</td></tr>
+    <tr><td>Quality eval</td><td><strong>2</strong></td><td>3 eval cases. No semantic gate over real data yet.</td></tr>
+    <tr><td>Autonomy</td><td><strong>2</strong></td><td>Assisted and parallel work today; the supervised-autonomy lanes are built but idle, so the rung is not reached.</td></tr>
+  </tbody>
+</table>
+</div>
+<h3>The ramp</h3>
+<ol class="path">
+  <li><div><span class="step">Make deletion real</span><p>Take the retention sweep out of dry-run, behind a signed deletion certificate and a restore test. Moves data protection to 4.</p></div></li>
+  <li><div><span class="step">Grow the eval corpus</span><p>To 30 cases per scope from real captured failures, then measure run-to-run noise before gating anything on it. Moves quality eval to 3.</p></div></li>
+  <li><div><span class="step">Let one lane carry real work</span><p>End to end: a real ticket claimed, the action bound, a human gating the exit. Moves autonomy to 3.</p></div></li>
+  <li><div><span class="step">Close the open security findings</span><p>Isolation first, each closed finding naming a proof the gate runs.</p></div></li>
+  <li><div><span class="step">Earn volume, then re-score</span><p>Everything at 4 stays at 4 until real traffic tests it. That, plus an outside reviewer, is the only route to 5.</p></div></li>
+</ol>
+
+<h2 id="status">What runs today</h2>
+<p>Seven services on one private Docker network. The known gaps are filed as public issues, not hidden in a paragraph.</p>
+<div class="status">
+  <div><span class="pill on">active</span><span>Daily digest, weekly eval and drift, weekly research watch, recurrence review, approval and ask-a-human gates.</span></div>
+  <div><span class="pill gap">dry-run only</span><span>The retention sweep deletes nothing yet. Anything holding tenant data has to wait until it does.</span></div>
+  <div><span class="pill gap">never carried work</span><span><code>dispatch</code> fires every 10 minutes but has never claimed a real ticket.</span></div>
+  <div><span class="pill gap">never run</span><span><code>drive-sync</code> and <code>deliverables</code> are waiting on Drive OAuth.</span></div>
+  <div><span class="pill gap">terms mismatch</span><span><code>gemini-runner</code> runs on free-tier consumer terms, while the data-handling record assumes Workspace terms.</span></div>
+</div>
+<p>If you’re deciding whether to depend on it: not yet. If you’re deciding whether the approach is sound, that’s what it’s here to show.</p>
+
+
+<h2 id="private">What stays private, and what doesn’t</h2>
+<p>The engine is public and AGPL. Three things are held back, and none of them is a control:</p>
+<dl class="rules">
+  <div><dt>Tenant and org content</dt><dd>The real scope tree, org identity, prompts and client context live in a private overlay. A hygiene gate enforces their absence here on every commit, and over the whole tree in CI.</dd></div>
+  <div><dt>Secrets</dt><dd>Never in the repo in any form. Tokens are per-service and held outside version control; decision records carry types and counts, never values.</dd></div>
+  <div><dt>Commercial analysis</dt><dd>A strategy document about ourselves isn’t part of the engine. The <em>gaps</em> are public anyway, as issues — that’s the half that matters if you’re evaluating this.</dd></div>
+</dl>
+<p>The mechanisms are public on purpose: a control that only works while its design is secret isn’t a control.</p>
+
+<footer>Sources: ai-control-plane README, AGENTS.md, docs/design/PROVIDER-BILLING.md, docs/runbooks/UPGRADES.md; ai-standards AGENTS.md, INSTALL.md, references/change-safety.md; engineering-standard SKILL.md and references/risk-tiers.md. Maturity ratings and the ramp: docs/design/MATURITY.md, which names the check behind each row.</footer>
+</div>
+</body></html>

@@ -1,0 +1,13 @@
+{
+  "id": "starter-plan-migration",
+  "scope": "starter",
+  "task_type": "plan",
+  "action": "advise",
+  "prompt": "Produce a short, ordered plan to migrate a production database to a new schema with zero downtime. Assume a live service that cannot stop serving traffic.",
+  "grader": {
+    "type": "judge",
+    "goal": "The plan is ordered, addresses zero-downtime migration (e.g. dual-write / backfill / phased cutover), and explicitly includes a rollback or backout step. A plan that omits any rollback/backout path FAILS."
+  },
+  "source": "example",
+  "created": "2026-07-19"
+}

@@ -1,0 +1,81 @@
+# Publish the generated documentation to GitHub Pages — from an ALLOWLIST.
+#
+# WHY THIS DOES NOT DEPLOY A DIRECTORY. `change-safety.md`: "a file placed in a
+# directory that gets deployed is public whether or not anything links to it."
+# Pages' branch-root and /docs modes are precisely that shape. This uploads only
+# what `site.manifest` names, via `scripts/build_site.py`, so adding a page is a
+# reviewable edit rather than a consequence of where a file was saved.
+#
+# WHY THE has_pages GUARD. This workflow lives in the private repo and is copied
+# into the public snapshot, so it exists in BOTH. Without a guard it would try to
+# deploy the private repo to a website. Guarding on `has_pages` rather than on a
+# hardcoded repository name means the condition is a fact about the repo it is
+# running in — and a fork that enables Pages gets a working site for free.
+name: pages
+
+# Deployment was disabled 2026-07-28 by operator instruction and RE-ENABLED
+# 2026-09-19 by operator instruction ("re-enable publishing to the public repo").
+# Both stops from 7db6823 are removed: the push trigger is back, and the deploy
+# job's `false &&` clause is gone. The has_pages guard remains the only switch,
+# and it is a fact about the repo: false here (private), true on the public
+# snapshot. To stop publishing again, restore both stops, not just one.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a half-finished deploy; let it land, then supersede it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # The manifest is verified on EVERY push, including where Pages is off, so a
+    # rename that orphans a page fails on the commit that caused it rather than
+    # months later on whichever repo happens to deploy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Verify site.manifest against disk
+        run: python scripts/build_site.py --check
+
+      - name: Build the site
+        if: github.event.repository.has_pages
+        env:
+          SITE_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: python scripts/build_site.py --out _site
+
+      - name: Confirm the built site is not empty
+        if: github.event.repository.has_pages
+        run: |
+          # A green deploy of zero files is the failure this whole repo keeps
+          # writing gates against. Assert the post-state, not the exit code.
+          n=$(find _site -type f ! -name '.nojekyll' | wc -l)
+          echo "_site contains $n file(s)"
+          test "$n" -ge 2 || { echo "::error::built site has $n file(s)"; exit 1; }
+          test -f _site/index.html || { echo "::error::no index.html"; exit 1; }
+
+      - uses: actions/configure-pages@v5
+        if: github.event.repository.has_pages
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event.repository.has_pages
+        with: { path: _site }
+
+  deploy:
+    needs: build
+    if: github.event.repository.has_pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

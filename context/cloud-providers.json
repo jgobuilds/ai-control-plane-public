@@ -1,0 +1,120 @@
+{
+  "_comment": "Which cloud provides each capability, per scope. The engine ships brand- AND vendor-neutral: an organization picks its provider here, and nothing above this file knows which one it got. Google is IMPLEMENTED; Azure and AWS are DECLARED AND UNIMPLEMENTED — they refuse loudly rather than silently falling back, because a capability that quietly degrades to nothing is how a control plane ends up believing it tokenized something it did not.",
+  "_fields": {
+    "status": "implemented = wired and callable · stub = the shape exists, the calls do not · unsupported = no path, refuse",
+    "egress": "the domains this provider needs. Runners are default-deny; adding a provider is an EXPLICIT egress decision, not a consequence of selecting it",
+    "processor": "the legal relationship required before tenant data may flow. ADR 0010 rejects any processor without one for tenant work",
+    "notes": "what a reader needs before choosing it"
+  },
+  "_choosing": "Set `default_provider`, or override per capability. A scope may override both — a tenant whose contract forbids one vendor is a scope-level setting, not a fork.",
+
+  "default_provider": "google",
+
+  "capabilities": {
+    "transcription": {
+      "why": "Tenant call transcripts with SPEAKER IDENTITY, not just diarization — see ADR 0015.",
+      "providers": {
+        "google": {
+          "status": "stub",
+          "service": "Google Meet built-in transcription -> Drive -> drive-sync -> scrubber",
+          "identity": "real participant identity from the Workspace directory",
+          "egress": ["meet.google.com", "www.googleapis.com", "oauth2.googleapis.com"],
+          "processor": "Workspace DPA",
+          "notes": "Requires a Workspace tier that includes transcription — UNVERIFIED, see ADR 0015. Adds no new processor if Workspace is already in place."
+        },
+        "azure": {
+          "status": "unsupported",
+          "service": "Azure AI Speech batch transcription + speaker diarization",
+          "identity": "acoustic diarization only — speakers are clusters, not people, unless Teams supplies identity",
+          "egress": ["*.cognitiveservices.azure.com"],
+          "processor": "Azure DPA / EU Data Boundary if applicable",
+          "notes": "Not built. Teams transcription is the identity-bearing equivalent of the Google path; raw Speech services are not."
+        },
+        "aws": {
+          "status": "unsupported",
+          "service": "Amazon Transcribe (ShowSpeakerLabels)",
+          "identity": "acoustic diarization only — spk_0, spk_1",
+          "egress": ["transcribe.*.amazonaws.com", "s3.*.amazonaws.com"],
+          "processor": "AWS DPA",
+          "notes": "Not built. No native meeting-identity source, so the department-grouping requirement in ADR 0015 would need solving separately."
+        }
+      }
+    },
+
+    "object_store": {
+      "why": "Where an engagement's artifacts land before the scrubber sees them.",
+      "providers": {
+        "google": {
+          "status": "stub",
+          "service": "Google Drive (already wired by the drive-sync workflow)",
+          "egress": ["www.googleapis.com", "oauth2.googleapis.com"],
+          "processor": "Workspace DPA",
+          "notes": "drive-sync exists and has NEVER RUN — it needs OAuth. Treat as untested."
+        },
+        "azure": {"status": "unsupported", "service": "Azure Blob Storage",
+                  "egress": ["*.blob.core.windows.net"], "processor": "Azure DPA",
+                  "notes": "Not built."},
+        "aws": {"status": "unsupported", "service": "Amazon S3",
+                "egress": ["s3.*.amazonaws.com"], "processor": "AWS DPA",
+                "notes": "Not built."}
+      }
+    },
+
+    "secrets": {
+      "why": "ADR 0009 names managed secrets as a requirement of the always-on deployment; today it is a gitignored .env.",
+      "providers": {
+        "google": {
+          "status": "unsupported",
+          "service": "GCP Secret Manager",
+          "egress": ["secretmanager.googleapis.com"],
+          "processor": "GCP DPA",
+          "notes": "Not built. .env is the current mechanism and is honest about being one."
+        },
+        "azure": {"status": "unsupported", "service": "Azure Key Vault",
+                  "egress": ["*.vault.azure.net"], "processor": "Azure DPA",
+                  "notes": "Not built."},
+        "aws": {"status": "unsupported", "service": "AWS Secrets Manager",
+                "egress": ["secretsmanager.*.amazonaws.com"], "processor": "AWS DPA",
+                "notes": "Not built."}
+      }
+    },
+
+    "dlp": {
+      "why": "The scrubber's detection backend. Heuristics ship in-repo; a cloud DLP is the optional upgrade named in DETECTION-BACKENDS.md.",
+      "providers": {
+        "google": {
+          "status": "unsupported",
+          "service": "Cloud DLP / Sensitive Data Protection",
+          "egress": ["dlp.googleapis.com"],
+          "processor": "GCP DPA",
+          "notes": "Documented in GSUITE-GCP.md, not wired. The built-in heuristic detector is the default and the fail-safe."
+        },
+        "azure": {"status": "unsupported", "service": "Azure AI Language PII detection",
+                  "egress": ["*.cognitiveservices.azure.com"], "processor": "Azure DPA",
+                  "notes": "Not built."},
+        "aws": {"status": "unsupported", "service": "Amazon Comprehend PII",
+                "egress": ["comprehend.*.amazonaws.com"], "processor": "AWS DPA",
+                "notes": "Not built."}
+      }
+    },
+
+    "model": {
+      "why": "Where the router's tiers actually execute. Distinct from the CLI runners, which are their own auth path.",
+      "providers": {
+        "google": {
+          "status": "stub",
+          "service": "Vertex AI (enterprise terms) — as opposed to the AI Studio free tier the gemini-runner uses today",
+          "egress": ["*.googleapis.com", "generativelanguage.googleapis.com"],
+          "processor": "GCP DPA",
+          "notes": "THE LIVE GAP: gemini-runner authenticates with a free AI Studio key, not a Workspace or Vertex credential. Same vendor, different terms. See ADR 0015."
+        },
+        "azure": {"status": "unsupported", "service": "Azure OpenAI",
+                  "egress": ["*.openai.azure.com"], "processor": "Azure DPA",
+                  "notes": "Not built."},
+        "aws": {"status": "unsupported", "service": "Amazon Bedrock",
+                "egress": ["bedrock*.amazonaws.com"], "processor": "AWS DPA",
+                "notes": "Not built."}
+      }
+    }
+  }
+}

@@ -1,0 +1,305 @@
+# The recurrence register — what has failed more than once, and what was done.
+#
+# THE RULE, and it is the whole file:
+#
+#   1st occurrence   fix the instance. Nothing goes here. Not every failure is a
+#                    pattern, and a register that demands paperwork for every red
+#                    run is a register nobody fills in.
+#   2nd occurrence   fix the HARNESS, and record it here. Twice is a pattern, and
+#                    a pattern only a human notices gets noticed later and later.
+#
+# A signature seen `threshold` times with no entry here FAILS the gate. So does an
+# entry that lies. Statuses, and what each one costs you:
+#
+#   harness-fixed  the harness now catches it. MUST carry `asserted_by` — a
+#                  command plus an expected substring, run by the gate. Same
+#                  contract as security/findings.yaml, for the same reason: a
+#                  claim nobody runs is not a verified claim. Add `requires` when
+#                  the proof needs a runtime this machine may not have (node lives
+#                  only in the containers here); that reports UNVERIFIED locally
+#                  and fails hard in CI.
+#   watching       a grace period. MUST carry `why` and `until`.
+#   accepted       knowingly carried. MUST carry `why` and `until`.
+#
+# `until` IS NOT OPTIONAL, and it is the only thing keeping this file honest. A
+# disposition with no expiry is how a register turns into a graveyard of things
+# somebody once decided to live with. When it passes, the gate fails and a human
+# re-decides. Re-deciding "yes, still fine, +90 days" is a fine outcome; never
+# being asked is not.
+#
+# `match` is a SUBSTRING of the signature, case-insensitive, first match wins.
+# Substring rather than equality because an error message eventually picks up a
+# new clause, and the register should survive that without a silent miss.
+#
+# Checked by: python scripts/recurrence.py check   (and `check --shape` in CI)
+# Fed by:     python scripts/recurrence.py collect
+
+meta:
+  threshold: 2
+  window_days: 90
+  checked_by: "scripts/recurrence.py"
+  sources: "GitHub Actions runs, the audit ledger's non-policy blocks, n8n executions"
+  note: >
+    Occurrences live in audit/recurrence.jsonl, which is gitignored runtime
+    evidence. That is why the gate has two modes: CI can only check this file's
+    honesty, and the counting half runs where the data is.
+
+entries:
+
+  - match: "ci:cause:dependabot-directory-has-no-manifest"
+    title: "Dependabot's docker updater aborted daily on a directory with no Dockerfile"
+    status: harness-fixed
+    first_seen: 2026-08-03
+    seen: 5
+    story: >
+      .github/dependabot.yml declared `package-ecosystem: docker` with
+      `directory: "/"`. There is no Dockerfile at the repo root — they are in the
+      five service directories — so the updater aborted with "No Dockerfiles nor
+      Kubernetes YAML found in /" and the whole Dependabot run went red, every
+      day, for five days. Nobody escalated because on any given morning it was
+      one red run. The cost was not the red X: dependency-security has a scanner
+      half that TELLS you a dependency is vulnerable and a Dependabot half that
+      OPENS THE PR fixing it. The scanner kept reporting, so the repo looked
+      covered while the fixing half had been dead since the 3rd.
+    harness_fix: >
+      One docker entry per real Dockerfile directory, and
+      scripts/dependabot_check.py now fails CI when any ecosystem names a
+      directory with no matching manifest — checkable with no network, no
+      credentials and no GitHub.
+    asserted_by:
+      cmd: "python scripts/dependabot_check.py"
+      expect: "entry(ies) resolve to a real manifest"
+      # The public snapshot excludes .github/dependabot.yml on purpose (a bump PR
+      # against a force-pushed repo can never merge), so there the gate has
+      # nothing to read and this proof does not apply. Absent here = reported,
+      # never a silent pass; present and failing = a hard failure as before.
+      skip_if_absent: ".github/dependabot.yml"
+
+  - match: "doc:retracted-claim:anthropic-agent-sdk-credit-cancelled"
+    title: "A corrected billing claim kept being restated by the docs around it"
+    status: harness-fixed
+    first_seen: 2026-08-01
+    seen: 2
+    story: >
+      The Anthropic billing claim was corrected twice and stayed wrong both times.
+      2026-08-01: a "correction" from secondary sources said the metered Agent
+      SDK credit was cancelled. 2026-08-10: PROVIDER-BILLING.md was re-verified
+      against the vendor's Help Center (it took effect 2026-06-15), and a dossier
+      entry recorded that every other doc "now points at" the matrix. They did,
+      and the README, LADDER and MARKET-ANALYSIS still stated the cancelled
+      version in their own words until 2026-09-19. A pointer does not retract the
+      sentence next to it, and fixing the source of truth fixes one file.
+    harness_fix: >
+      context/retracted-claims.json registers the claim as regexes plus the files
+      allowed to quote it as history; scripts/claims_check.py fails CI on any
+      other tracked doc that restates it, wrapped or bolded. Watched failing on
+      the unfixed tree (6 hits, including one in idea-dossier/00-index.md a
+      manual grep had missed). New retractions are one registry entry.
+    asserted_by:
+      cmd: "python tests/claims_check_test.py"
+      expect: "All claims-check checks passed."
+
+  - match: "router:runner error"
+    title: "A runner returned 5xx and the decision recorded no usable reason"
+    status: harness-fixed
+    first_seen: 2026-08-01
+    seen: 7
+    story: >
+      Seven of these during the 2026-08-01 isolation migration. The failures
+      themselves were self-inflicted — runners were being rebuilt — but they
+      exposed finding D1: a runner error came back as a successful, EMPTY
+      decision, so the ledger recorded seven successes and the reason for none
+      of them.
+    harness_fix: >
+      callRunner rejects on status >= 400, and runnerErrorSummary puts a
+      diagnosable first line into the record without dragging the prompt in with
+      it (that second half is finding D3, which this fix caused).
+    asserted_by:
+      cmd: "node --test tests/unit/router.test.mjs"
+      expect: "a non-prompt error still diagnoses"
+      requires: node
+
+  - match: "router:runner unreachable"
+    title: "The router called a runner hostname that no service answered to"
+    status: harness-fixed
+    first_seen: 2026-07-31
+    seen: 6
+    story: >
+      ENOTFOUND, six times over two days of the per-isolation-root migration.
+      Root cause every time: context/runner-map.json and the generated compose
+      disagreed about a hostname, and nothing compared them — the first thing to
+      notice was a request failing in flight.
+    harness_fix: >
+      conformance_test.py asserts every host the runner map names — scopeToHost
+      and providerHosts alike — is a service the generated compose actually
+      defines, so the two can no longer drift apart quietly. Deliberately
+      unconditional: the gemini-specific assertions next to it only run on a tree
+      with pooled scopes, and the sample tree CI uses has none.
+    asserted_by:
+      cmd: "python scripts/conformance_test.py"
+      expect: "every runner-map host is a service the compose defines"
+
+  - match: "ci:cause:vendored-file-fails-the-linter"
+    title: "A known-cause row false-positives on this repo's own test output"
+    status: harness-fixed
+    first_seen: 2026-08-03
+    seen: 2
+    story: >
+      Two `quality` failures were signed as "vendored file fails the linter".
+      Neither was. The row matched `ruff` AND `Found ` anywhere in the whole log,
+      and ci_diagnose's own test suite prints "PASS  clean ruff check claims no
+      cause" while exercising that very row — so the cause table matched the test
+      that tests the cause table. This is the same self-referential collision the
+      repo has hit twice before: our vocabulary for DESCRIBING failures is the
+      vocabulary of actual failures. The real failure in both runs was an
+      unrelated "FAILED: 1 check(s)".
+    harness_fix: >
+      Fixed in THIS repo's vendored scripts/ci-known-causes.json. **The canonical
+      copy at ai-standards/scripts/ci-known-causes.json is NOT yet updated** —
+      verified 2026-08-31 by diffing the two: canonical still carries the old
+      `match: [ruff, "Found "]` with no `same_line`. So the fix here is real but
+      FRAGILE, and the next re-vendor would revert it. That is precisely the
+      failure mode this entry's earlier draft warned about, now true of the entry
+      itself. Outstanding action: apply the same row to the canonical copy and
+      re-vendor; until then this repo is deliberately divergent and the divergence
+      is recorded rather than assumed away. (The earlier `watching` note said a drift check
+      enforces byte-identity on this file. It does not: tests/pii_vendor_test.py
+      guards pii-patterns.js only, and NOTHING compares this file to the
+      canonical copy. Byte-identity here is convention, unenforced.) The row
+      now carries `same_line: true` and keys on ruff's summary LINE ("Found N
+      error(s)."), so a passing assertion that merely names the tool can no
+      longer supply half the signature. `ruff` is not in the terms at all: it is
+      never on that line — the command echo and the summary are different lines,
+      which is exactly why whole-log AND matching was reached for in the first
+      place. `not_match: source file` separates mypy, which phrases its summary
+      the same way and runs in the SAME job as ruff in two consuming repos.
+      Proven against the source: both real run logs (30855032473, 30828947680)
+      re-diagnose as `escalate` with the fixed table and as this cause with the
+      old one.
+    retraction: >
+      The two occurrences were retracted from audit/recurrence.jsonl on
+      2026-08-07 — they record a cause that never happened, and a wrong signature
+      left in the count is exactly what makes the register lie. The runs are
+      outside the collector's 60-run window so nothing re-signs them; a fresh
+      collect would have signed both "ci:process completed with exit code <n>.".
+      Prior ledger kept at audit/recurrence.jsonl.retracted-2026-08-07.bak
+      (gitignored, like the ledger itself). The failures themselves are recorded
+      here, which is the durable half.
+    asserted_by:
+      cmd: "python tests/ci_diagnose_test.py"
+      expect: "PASS  our own PASS lines do not claim the linter row"
+
+  - match: "ci:security-scan:process completed with exit code"
+    title: "security-scan failed nightly on vulnerable pinned images — twice, for two different reasons"
+    status: harness-fixed
+    first_seen: 2026-08-18
+    seen: 13
+    story: >
+      Trivy failed the security-scan workflow every night from 2026-08-18 while
+      this work was paused. Cause: the pinned n8n 2.30.7 image carried CRITICAL
+      findings, and n8n published two advisory batches (2026-08-05, 2026-08-19)
+      that between them left 41 advisories applying to that version — 27 of them
+      high, including expression-sandbox escapes to host RCE. Nobody escalated,
+      because on any given night it was one red run. This is the register's
+      founding case happening a second time, on a security control rather than a
+      dependency updater.
+      .
+      The register CAUGHT it — 13 occurrences counted — but labelled it
+      unreadably: ci_diagnose ranked a Trivy TABLE ROW as the strongest failing
+      line, so the signature was "ci:| es/redis-errors/package.json | | |". The
+      count was right and the label was useless, which is a recurrence nobody can
+      act on.
+      .
+      SECOND EPISODE, 2026-09-13 to 2026-09-17 — four scheduled nights plus the
+      push that merged H5. This time the cause was not a lapsed review; the pin
+      review was current (reviewBy 2026-09-30) and image_policy_check PASSED the
+      whole time. On 2026-09-03 a Dependabot base-image bump was accepted without
+      checking what its digests were. The FROM lines were `node@sha256:...` with no
+      tag, so Dependabot had tracked `:latest`: the pins became node:latest (Node
+      26, full Debian 13) and python:latest (3.14, full Debian 13) while the policy
+      and the comment above each FROM still said node:22-bookworm-slim and
+      python:3.12-alpine. The scan then failed on 39 CRITICALs in ImageMagick, perl
+      and LibRaw — packages a slim or alpine image does not contain. Merging the
+      open Dependabot PRs would NOT have fixed it: their digests carried the same 39.
+      The live containers were never rebuilt and ran the intended images
+      throughout, which is why nothing else noticed.
+      .
+      So the first harness fix was real but insufficient: a CURRENT review of a
+      pin says nothing about whether the pin is what the record says it is.
+    harness_fix: >
+      Two fixes. The instance: re-pinned n8n 2.30.7 -> 2.36.9 (the digest that
+      n8nio/n8n:latest AND :stable both resolve to), taking Trivy from 56 fixed
+      HIGH/CRITICAL findings to 3 HIGH and 0 CRITICAL. The harness:
+      _ci_signature now rejects lines containing box-drawing characters, because
+      a rendered table is layout rather than a diagnosis, and qualifies the
+      generic "process completed with exit code" fallback with the WORKFLOW NAME
+      so one disposition cannot prefix-match every red run in the repo.
+      .
+      The proof command is the pin gate rather than Trivy itself: what let a
+      vulnerable image sit for two weeks was not a missing scan, it was a lapsed
+      pin REVIEW. image_policy_check.py fails when the review date passes, which
+      is the control that actually prevents the recurrence.
+      .
+      Second episode, 2026-09-17. The instance: node and python re-pinned to the
+      digests node:22-bookworm-slim and python:3.12-alpine resolve to, verified by
+      scanning with the CI flags (node: one CRITICAL, CVE-2026-59873, whose
+      exception was wrongly deleted on 2026-09-03 and is restored with that history;
+      python: zero). The harness: every FROM and compose image now names
+      `image:tag@sha256:...`, so Dependabot bumps within the tag, and
+      image_policy_check FAILS any pinned ref that does not name the tag its policy
+      records or does not use the recorded digest. tests/image_policy_test.py
+      synthesises the digest-only shape and demands the gate go red; against the
+      pre-fix gate it does. What remains unprovable statically — that a digest
+      belongs to its tag — is stated in the check itself: resolve and inspect an
+      image before accepting any bump.
+    asserted_by:
+      cmd: "python scripts/image_policy_check.py && python tests/image_policy_test.py"
+      expect: "All image-policy checks passed."
+
+  - match: "rollout:health:BAD /health answers 200: got 0"
+    title: "The rollout gate probed /health once, right after recreating the service"
+    status: harness-fixed
+    first_seen: 2026-09-18
+    seen: 1
+    story: >
+      2026-09-18: `rollout.py promote` stopped at the n8n wave with "BAD /health
+      answers 200: got 0" over an n8n that was fine. health() probed once,
+      immediately after `up -d` recreated the container, with a 5s timeout. n8n
+      needs roughly 6-20s to boot — its own log said "Editor is now accessible"
+      and /healthz answered {"status":"ok"} shortly after, and `rollout.py verify
+      n8n` passed moments later.
+      .
+      This is in the register at ONE occurrence, against the file's own rule, on
+      purpose. The rule waits for a second sighting because most failures are not
+      patterns. This one is deterministic: n8n's boot is slower than a single
+      probe every time, so every promote would have failed at the same wave. The
+      cost is not the red run, it is what a gate that cries wolf teaches — the
+      operator learns to skip past the n8n wave, or rolls back a healthy service,
+      and the gate stops being a gate. Waiting for the second occurrence to say
+      so would only have meant one more promote spent teaching that.
+      .
+      Nothing collects rollout.py's output — the sources are GitHub Actions, the
+      audit ledger and n8n executions — so this signature will stay at 1 and the
+      counting half of the gate will never see it. The entry is here for the
+      human reading the register, and the proof command below is what actually
+      holds the fix in place.
+    harness_fix: >
+      verify now polls: every 2s until 200, bounded by a per-service boot grace
+      (60s for n8n, 20s for everything else), and it reports how long it took —
+      "got 200 after 19.2s, 7 attempt(s)" — so a slow boot is visible rather than
+      silently tolerated. No sleep runs past the deadline, so the wait is at most
+      the grace plus one probe's own timeout.
+      .
+      A crash-loop does not get the window: each missed probe inspects the
+      container, and stopped/restarting/RestartCount>0 ends the wait immediately.
+      The running and restart checks are then made on the state AFTER the wait,
+      so a service that dies while being waited for still fails. Everything else
+      the gate judges — pins, the enforcement probe — is unchanged.
+      .
+      Proven live on 2026-09-20: `docker restart n8n` followed straight away by
+      `verify n8n` passed at 19.2s over 7 attempts, the exact shape that failed
+      on the 18th. tests/rollout_test.py pins the logic on a fake clock, so the
+      bound is tested without anything sleeping.
+    asserted_by:
+      cmd: "python tests/rollout_test.py"
+      expect: "All rollout checks passed."

@@ -1,0 +1,9 @@
+{
+  "name": "claude-runner-agent-tools",
+  "private": true,
+  "description": "Agent CLIs baked into claude-runner, installed with `npm ci` into a root-owned prefix. Exact versions + package-lock.json pin the whole tree. See the Dockerfile for how versions are chosen.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.267",
+    "n8n-mcp": "2.84.0"
+  }
+}

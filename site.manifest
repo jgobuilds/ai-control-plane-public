@@ -1,0 +1,19 @@
+# What becomes the website. An ALLOWLIST, read by scripts/build_site.py.
+#
+# The pair to `.publish-exclude`: that one decides what leaves the repo, this
+# one decides what becomes a public web page. Both are enumerated on purpose.
+# `change-safety.md` is explicit about why — "a file placed in a directory that
+# gets deployed is public whether or not anything links to it" — so Pages here
+# never deploys a directory. Adding a page is an edit to this file.
+#
+# Being in this list means TWICE public: already in a public repo, and now also
+# indexable by search engines. That second one is the new decision.
+#
+# Format:  path | title | one-line description
+# A listed file that does not exist is a BUILD FAILURE, not a skipped row. A
+# rename that silently dropped a page would otherwise publish a site whose own
+# index links to nothing.
+
+docs/overview.html | Overview | How work flows through the control plane, the rules that govern it, how review lenses work, and what runs today.
+docs/design/architecture.html | Architecture | Every service, port, mount mode and lane — generated from the running stack, never hand-written.
+usecase-register.html | Use-case register | What the system is actually asked to do, and which control covers each case.

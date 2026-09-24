@@ -1,0 +1,111 @@
+{
+  "name": "Parallel worktree fan-out (AG-2)",
+  "meta": {
+    "description": "Fans several agents out in parallel, each isolated in its own git worktree, each self-verifying. Calls claude-runner /fanout. Nothing is merged or pushed — you review branches agent/<id> (or patches in workspace/.fanout) and merge by hand. Requires a git repo at workspace/<repo>."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "dddddddd-0000-0000-0000-000000000001",
+      "name": "When clicking Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define the parallel work here. Each task gets its own worktree + branch.\n// `verify` is a shell command run inside that worktree (tests/build/lint).\nreturn [{ json: {\n  repo: 'repo',            // path under workspace/ that is a git repo\n  base: 'main',           // branch each worktree forks from\n  clean: true,            // re-runnable: wipe same-id worktrees/branches first\n  tasks: [\n    { id: 'bump-deps',   prompt: 'Upgrade dependencies with security advisories; keep tests green.', verify: 'npm test' },\n    { id: 'fix-lint',    prompt: 'Fix all lint errors without changing behavior.',                   verify: 'npm run lint' },\n    { id: 'add-tests',   prompt: 'Add unit tests for the untested utils in src/lib.',                verify: 'npm test' }\n  ]\n} }];"
+      },
+      "id": "dddddddd-0000-0000-0000-000000000002",
+      "name": "Build fan-out request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://router:8080/fanout",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-router-token",
+              "value": "change-me-to-a-long-random-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"scope\": \"engineering\", \"action\": $json.action, \"repo\": $json.repo, \"base\": $json.base, \"clean\": $json.clean, \"tasks\": $json.tasks } }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "id": "dddddddd-0000-0000-0000-000000000003",
+      "name": "Fan out (parallel worktrees)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turn the runner's results into a review summary. Feed `message` into the\n// Notify sub-workflow if you want an alert.\nconst r = $input.first().json;\nconst lines = (r.results || []).map(x =>\n  `- ${x.id} [${x.status}]` +\n  (x.verify ? ` verify:${x.verify.passed ? 'PASS' : 'FAIL'}` : '') +\n  (x.diffStat ? ` (${x.diffStat.replace(/\\n/g,' ')})` : '')\n);\nreturn [{ json: {\n  severity: (r.results || []).some(x => x.status === 'failed' || x.status === 'error') ? 'warn' : 'info',\n  title: 'Parallel fan-out complete',\n  message: `${r.review}\\n\\n${lines.join('\\n')}`,\n  source: 'parallel-fanout'\n} }];"
+      },
+      "id": "dddddddd-0000-0000-0000-000000000004",
+      "name": "Summarize for review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "When clicking Test": {
+      "main": [
+        [
+          {
+            "node": "Build fan-out request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build fan-out request": {
+      "main": [
+        [
+          {
+            "node": "Fan out (parallel worktrees)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan out (parallel worktrees)": {
+      "main": [
+        [
+          {
+            "node": "Summarize for review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "active": false
+}

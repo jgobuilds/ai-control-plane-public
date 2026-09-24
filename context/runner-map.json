@@ -1,0 +1,30 @@
+{
+  "generatedFrom": "scopes.json",
+  "scopeToHost": {
+    "enterprise": "claude-runner-enterprise",
+    "consulting": "claude-runner-consulting",
+    "tenant-a": "claude-runner-tenant-a",
+    "tenant-b": "claude-runner-tenant-b",
+    "engineering": "claude-runner-engineering",
+    "data-team": "claude-runner-engineering",
+    "jane": "claude-runner-engineering"
+  },
+  "roots": [
+    "enterprise",
+    "consulting",
+    "tenant-a",
+    "tenant-b",
+    "engineering"
+  ],
+  "hosts": [
+    "claude-runner-consulting",
+    "claude-runner-engineering",
+    "claude-runner-enterprise",
+    "claude-runner-tenant-a",
+    "claude-runner-tenant-b"
+  ],
+  "providerHosts": {
+    "gemini": null
+  },
+  "_providerNote": "gemini serves POOLED scopes only. Isolation roots score blockCrossVendor (silo/pii:block => data 3), so policy already refuses them a second vendor; the router escalates such a request to the cheapest permitted claude tier rather than refusing it."
+}

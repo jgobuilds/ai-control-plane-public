@@ -1,0 +1,240 @@
+{
+  "id": "aicp-daily-digest",
+  "name": "Daily digest lane (scheduled, human-awareness digest tier)",
+  "meta": {
+    "description": "Density-adaptive daily digest — the 'stay aware' tier between interrupt (CI alerts) and on-demand (the ledger). A Schedule Trigger calls the `lanes` service over the internal network (GET lanes:8081/digest?days=1, header x-lanes-token from $env.LANES_TOKEN); lanes runs scripts/daily_digest.py — a thin formatter over eval_metrics.py — and returns the FINAL { post, severity, title, message, source } payload, leading with anomalies (drift / blocks / change-failures) and stating coverage before any notional total. n8n cannot run python itself (hardened image, no package manager — see docs/decisions/0006), so the lane runs in `lanes` while the SCHEDULE, EXECUTION LOG, IF gate and Notify seam all stay in n8n. A Code node parses the response (and synthesizes an error post if the call failed, so the lane never goes dark), then the IF gate calls Notify ONLY when post===true — ordinary quiet days stay silent and a single weekly heartbeat (default Monday) proves the lane is alive. Ships INACTIVE. Deploy with `python scripts/n8n_bootstrap.py --import daily-digest.workflow.json` then `--dry-run aicp-daily-digest`, then `--activate aicp-daily-digest` — no UI clicks. Channel is chosen at the Notify seam (NOTIFY_CHANNEL / SLACK_WEBHOOK_URL). Metadata only; the ledger carries no prompts or PII. See ai-standards/references/notification-taxonomy.md and AIOPS.md."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "d1d1d1d1-0000-0000-0000-000000000001",
+      "name": "Daily (07:30)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://lanes:8081/digest?days=1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lanes-token",
+              "value": "={{ $env.LANES_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d1d1d1d1-0000-0000-0000-000000000002",
+      "name": "Run daily digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The lanes service returns the FINAL {post,severity,title,message,source}\n// payload as the response BODY, so $json is the payload. If the HTTP call failed\n// (the node continues on error) or the body is malformed, synthesize an error\n// post — a missing digest must never look like a quiet day.\nconst d = $input.first().json;\nif (!d || typeof d.post === 'undefined') {\n  return [{ json: {\n    post: true,\n    severity: 'error',\n    title: 'Daily digest: lane call failed',\n    message: `Unexpected response from lanes /digest:\n${JSON.stringify(d).slice(0, 600)}\nThe digest lane errored; this post is its own alarm.`,\n    source: 'digest'\n  } }];\n}\nreturn [{ json: d }];"
+      },
+      "id": "d1d1d1d1-0000-0000-0000-000000000003",
+      "name": "Parse digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "post-is-true",
+              "leftValue": "={{ $json.post }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d1d1d1d1-0000-0000-0000-000000000004",
+      "name": "Post?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "d1d1d1d1-0000-0000-0000-000000000005",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        220
+      ]
+    },
+    {
+      "id": "ondemand",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        460
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    }
+  ],
+  "connections": {
+    "Daily (07:30)": {
+      "main": [
+        [
+          {
+            "node": "Run daily digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run daily digest": {
+      "main": [
+        [
+          {
+            "node": "Parse digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse digest": {
+      "main": [
+        [
+          {
+            "node": "Post?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post?": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Run daily digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "aicp-error-trigger"
+  },
+  "active": false
+}

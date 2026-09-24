@@ -1,0 +1,144 @@
+{
+  "_comment": "SHARED known CI failure causes, matched deterministically before any model is asked. VENDORED BYTE-IDENTICAL across every repo — canonical copy lives in ai-standards/scripts/. Do NOT add repo-specific rows here; they belong in that repo's .ci-known-causes.json, which is unioned with this file. Every entry was diagnosed and fixed for real: a speculative signature is a confident wrong answer waiting to happen. Adding a row is data, not code.",
+  "_fields": {
+    "id": "stable key, referenced in the ledger and in eval",
+    "match": "ALL of these substrings must appear in the log (case-insensitive)",
+    "not_match": "if ANY of these appear, this is not the cause — guards against a near-miss claiming a match",
+    "cause": "what is actually wrong, in one sentence",
+    "fix": "the confirmed remedy — what a human should DO",
+    "confidence": "high = seen and fixed; medium = seen once, fix inferred",
+    "first_seen": "when it was diagnosed",
+    "same_line": "require all `match` terms on ONE line. Use when the same rule appears in both a PASS and a FAIL line — whole-log matching cannot tell them apart.",
+    "prevent": "the MECHANISM that stops recurrence — a gate, a test, a default, an untracked file. Distinct from `fix`, which addresses this run. Omit rather than write an intention: 'be more careful' is not a mechanism, and a row that says so honestly is more useful than one that pretends."
+  },
+  "causes": [
+    {
+      "id": "cross-repo-link-not-in-ci",
+      "match": [
+        "BROKEN LINKS",
+        "../../../"
+      ],
+      "cause": "A markdown link points at a SIBLING repo. It resolves on a developer's disk and never in CI, which clones this repo alone.",
+      "fix": "Not a defect. check_links reports these as OUTSIDE THIS REPO; if one still fails, the link escaped the repo without being caught by that rule.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "The link checker reports out-of-repo links as UNVERIFIABLE rather than broken, so the gate cannot fail on something CI structurally cannot see."
+    },
+    {
+      "id": "vendored-file-reformatted",
+      "match": [
+        "Would reformat"
+      ],
+      "not_match": [
+        "--fix"
+      ],
+      "cause": "A linter or formatter is being run over a VENDORED file that must stay byte-identical to its upstream copy. The FORMATTER wants to rewrite it.",
+      "fix": "Add the vendored paths to the tool's exclude list (ruff `extend-exclude`, which covers BOTH `check` and `format`). Without it the tool and the re-sync overwrite each other forever, and the drift check reports drift on every run until someone ignores it.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "Every vendored path is listed in the formatter's exclude config at the moment it is vendored — not after the first red build."
+    },
+    {
+      "id": "vendored-file-fails-the-linter",
+      "match": [
+        "Found ",
+        "error"
+      ],
+      "not_match": [
+        "source file"
+      ],
+      "same_line": true,
+      "cause": "A linter or formatter is being run over a VENDORED file that must stay byte-identical to its upstream copy. The LINTER rejects it.",
+      "fix": "Add the vendored paths to the tool's exclude list (ruff `extend-exclude`, which covers BOTH `check` and `format`). Without it the tool and the re-sync overwrite each other forever, and the drift check reports drift on every run until someone ignores it.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "_note": "TWO rows, not one loosened row. The original keyed on \"would be reformatted\" and so caught only `ruff format`; the next repo in the sweep failed on `ruff check` instead. Widening it to match \"ruff\" then fired on a CLEAN format run — `match` is AND-only across the whole log, so it cannot express \"either message\". Same cause with two different messages is two signatures. THIRD REVISION, same collision a third time: \"ruff\" AND \"Found \" anywhere in the log matched ci_diagnose's OWN test output, which prints \"PASS  clean ruff check claims no cause\" while exercising this very row and \"False positives found in the wild\" as a heading — the cause table matched the test that tests the cause table (ai-control-plane runs 30855032473 and 30828947680, both really \"FAILED: 1 check(s)\"). The signature is now ruff's summary LINE, `same_line`, so a passing assertion that merely names the tool cannot supply half of it. \"ruff\" is not in the terms because it is never on that line — the command echo and the summary are different lines, which is exactly why whole-log AND was reached for. `not_match: source file` separates mypy, which prints \"Found 3 errors in 1 file (checked 12 source files)\" and runs in the SAME job as ruff in two consuming repos.",
+      "prevent": "Same exclude list covers `check` as well as `format`. Adding a vendored file and adding its exclusion is one action, not two."
+    },
+    {
+      "id": "docker-from-trailing-comment",
+      "match": [
+        "FROM requires either one or three arguments"
+      ],
+      "cause": "A digest-pinned FROM line has a trailing # comment; Docker parses it as arguments.",
+      "fix": "Move the comment to its own line above the FROM.",
+      "confidence": "high",
+      "first_seen": "2026-07-25",
+      "prevent": "Image pins are validated by scripts/image_policy_check.py in CI, which parses the FROM line rather than trusting it."
+    },
+    {
+      "id": "action-version-does-not-exist",
+      "match": [
+        "Unable to resolve action"
+      ],
+      "cause": "A pinned GitHub Action version does not exist.",
+      "fix": "Check the real tags. Prefer a pinned container image over a third-party Action in a security pipeline — fewer moving parts to trust.",
+      "confidence": "high",
+      "first_seen": "2026-07-25",
+      "prevent": "Prefer a digest-pinned container image over a third-party Action in any security pipeline — fewer third parties whose tag list has to stay true."
+    },
+    {
+      "id": "gitleaks-bridge-stale-cli",
+      "match": [
+        "engine: built-in only"
+      ],
+      "not_match": [
+        "gitleaks not installed"
+      ],
+      "cause": "gitleaks is installed but the scan fell back to built-in patterns — the bridge is calling a CLI shape gitleaks no longer has.",
+      "fix": "gitleaks v8.19+ replaced detect/protect with dir/git and made the source positional. Check run_gitleaks() in scripts/pii_scan.py.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "The scan prints WHICH engine ran. A silent fallback to built-in patterns is the failure mode; naming the engine is what makes it visible."
+    },
+    {
+      "id": "ci-permissions-block-replaces-defaults",
+      "match": [
+        "resource not accessible by integration"
+      ],
+      "cause": "A job's `permissions:` block REPLACES the default scope set rather than adding to it, so listing any scope silently removes every scope not listed.",
+      "fix": "Add the scope the step actually needs back to the block — `actions: read` for `gh run view`. Least privilege is right; just remember the block is a full replacement, not a delta.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "_note": "Diagnosed by the diagnostician's own first real run (PR #3), which is the promotion loop working as designed.",
+      "prevent": "The diagnose step warns loudly when the log fetch fails, and the tool reports `no-log` rather than 'unrecognised failure' — so a lost scope announces itself instead of degrading into a plausible wrong answer."
+    },
+    {
+      "id": "own-run-log-not-archived-yet",
+      "match": [
+        "no lines matched the failure heuristics"
+      ],
+      "cause": "A job tried to read its OWN run's archived log. The run is still in progress while that job executes, so `gh run view --log-failed` returns something non-empty but useless rather than the failure.",
+      "fix": "Fetch per-JOB logs instead: list the run's jobs, select conclusion==failure, and GET repos/{repo}/actions/jobs/{id}/logs. An individual job's log is available as soon as that job finishes.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "Fetch per-JOB logs, never the run archive, from inside the run. The run archive does not exist yet by construction, so this is a rule about ordering rather than about care."
+    },
+    {
+      "id": "gitignored-but-still-tracked",
+      "match": [
+        ".pyc"
+      ],
+      "not_match": [
+        "All checks passed"
+      ],
+      "cause": "A generated file (bytecode, cache, build output) is TRACKED by git. .gitignore has no effect on files git already tracks, so an ignore rule can be added, look applied, and do nothing.",
+      "fix": "git rm -r --cached <path>, then commit. Adding the .gitignore line is only half; the untrack is the part that acts. Check with `git ls-files | grep <pattern>`.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "A .gitignore addition is only half the change. Pair every new ignore rule with `git ls-files | grep <pattern>` — if it returns anything, the rule is decorative."
+    },
+    {
+      "id": "render-drift-gate-fires-on-generated-artifact",
+      "match": [
+        "Rendered output differs"
+      ],
+      "cause": "A \"did the committed render drift from its sources?\" gate is diffing a file the build REGENERATES nondeterministically — bytecode, a cache, a timestamped artifact. The gate is right; the file should not be tracked.",
+      "fix": "Read the `git diff --stat` line the gate prints. If the drifting file is generated, untrack it (git rm --cached). Do not weaken the gate.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "_note": "Cost 7 consecutive red builds, and a wrong diagnosis on top: line endings were blamed first because the story was plausible. The evidence was one line of the CI output, already printed, naming the exact file.",
+      "prevent": "Generated artifacts are untracked, not ignored-and-tracked. A drift gate is then measuring only what a human wrote, which is what it was for."
+    }
+  ]
+}

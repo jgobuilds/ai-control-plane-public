@@ -1,0 +1,162 @@
+{
+  "id": "aicp-seam-heartbeat",
+  "name": "Seam heartbeat (ask-human door)",
+  "active": false,
+  "settings": {
+    "errorWorkflow": "aicp-error-trigger"
+  },
+  "meta": {
+    "description": "Every 15 minutes, knock on POST /webhook/ask-human and alert if the door is not there. Built after that endpoint returned 404 for an unknown period: an orphaned webhook registration (from a workflow-ID rename) squatted the path, so the workflow was ACTIVE and the door was shut. Nothing noticed, because the only symptom was agents silently having no way to reach a human. WHAT IT PROVES AND WHAT IT DOES NOT: n8n answers a registered webhook with 200 'Workflow was started' before the workflow runs, so 200 proves the PATH IS REGISTERED and nothing about the run. That is precisely the failure being watched (404 = deregistered), and it is not a check that the ask flow works end to end. It also cannot detect n8n being down — a probe hosted inside n8n cannot report its own absence; container health covers that. Alerts on the SECOND consecutive failure, not the first: one blip is usually a restart, and paging on it trains everyone to ignore the alert. Re-raises every 4th failure (hourly) so a forgotten outage does not fade, and sends one info message on recovery. Counter state lives in workflow static data, which survives restarts but NOT a re-import of this workflow."
+  },
+  "nodes": [
+    {
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "name": "Knock on /ask-human",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/ask-human",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ask-human-token",
+              "value": "={{ $env.ASK_HUMAN_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ healthcheck: true }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          },
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "name": "Decide (2 strikes)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// TWO CONSECUTIVE FAILURES before alerting. One 15-minute blip is usually a\n// restart or a redeploy; paging on it teaches everyone to ignore the alert,\n// which costs more than the blip. Two in a row is a state, not an event.\n//\n// State lives in $getWorkflowStaticData('global'), which n8n persists on the\n// workflow record. It survives restarts. Two limits, both verified rather than\n// assumed, because a counter that silently fails to persist would mean this\n// alert NEVER fires — the worst possible failure for a monitor:\n//   * It is saved for PRODUCTION runs only. A manual `n8n execute` does not\n//     persist it, so the two-strike behaviour cannot be exercised by hand — the\n//     first strike will simply repeat forever. Confirmed on a real scheduled\n//     tick, which did persist consecutiveFailures:1.\n//   * It does NOT survive a re-import of this workflow, so the first failure\n//     after a re-import is silent even if the door was already shut.\nconst st = $getWorkflowStaticData('global');\nconst r = $input.first().json || {};\nconst code = Number(r.statusCode ?? 0);\nconst NL = String.fromCharCode(10);\n\nconst prevFails = Number(st.consecutiveFailures || 0);\nconst hadAlerted = !!st.alerted;\n\n// A 200 only counts with ok:true in the body. The door used to answer 200\n// \"Workflow was started\" to every caller before checking anything, so a\n// status-only check read a locked door as open. Requiring the body means a\n// regression to that answer-on-receipt shape alarms instead of passing.\nconst opened = code === 200 && !!r.body && r.body.ok === true;\nif (opened) {\n  st.consecutiveFailures = 0;\n  st.alerted = false;\n  // RECOVERY is worth one message, but only if we actually raised the alarm.\n  // A silent recovery leaves someone believing the outage is still open.\n  if (hadAlerted) {\n    // Recovering from a BLIND probe is not the same as the door coming back: we\n    // never knew it was down. Saying 'door is BACK' there would assert an outage\n    // that was never observed, which is the same over-claim the fault titles\n    // exist to avoid.\n    const wasBlind = st.lastFault === 'blind';\n    st.lastFault = null;\n    return [{ json: {\n      severity: 'info',\n      title: wasBlind\n        ? 'ask-human heartbeat can SEE again (HTTP 200)'\n        : 'ask-human door is BACK (HTTP 200)',\n      message: [\n        'POST /webhook/ask-human is answering again.',\n        '',\n        wasBlind\n          ? 'The probe had been unable to authenticate for ' + prevFails\n            + ' consecutive checks, so the state of the door was unknown for that '\n            + 'window. It is confirmed open now.'\n          : 'It had failed ' + prevFails\n            + ' consecutive checks. Agents can reach a human again.',\n      ].join(NL),\n      source: 'seam-heartbeat',\n    } }];\n  }\n  return [];\n}\n\nconst fails = prevFails + 1;\nst.consecutiveFailures = fails;\n\n// Strike one is silent. After alerting, go quiet but re-raise every 4th check\n// (hourly at a 15-minute cadence) so a forgotten outage does not fade away.\nconst firstAlert = fails === 2;\nconst reminder = hadAlerted && fails % 4 === 0;\nif (!firstAlert && !reminder) { return []; }\nst.alerted = true;\n\nlet title, why;\nif (code === 404) {\n  title = 'ask-human door is SHUT (404 - path not registered)';\n  why = 'The path is not registered. Most likely an ORPHANED webhook registration '\n      + 'is squatting it, which survives a restart and cannot be cleared from the '\n      + 'n8n UI. Run: python scripts/n8n_doctor.py';\n} else if (!code) {\n  title = 'ask-human door UNREACHABLE (no HTTP response)';\n  why = 'Timeout or connection refused. n8n itself may be down - though if it were, '\n      + 'this probe would not have run either, so suspect the network or the port.';\n} else if (code === 401 || code === 403) {\n  title = 'ask-human heartbeat is BLIND (HTTP ' + code + ')';\n  why = 'The probe could not authenticate, so the state of the door is UNKNOWN - it '\n      + 'may be perfectly fine. Fix ASK_HUMAN_TOKEN for the probe; this is not an outage.';\n} else if (code === 503) {\n  title = 'ask-human door is SHUT (503 - n8n has no ASK_HUMAN_TOKEN)';\n  why = 'n8n is running without ASK_HUMAN_TOKEN, so the door refuses every caller. '\n      + 'Set it in .env and recreate n8n.';\n} else if (code === 200) {\n  title = 'ask-human door answered 200 WITHOUT checking (no ok:true)';\n  why = 'The webhook replied before the auth node ran, which is the answer-on-receipt '\n      + 'shape that hid rejections. Its responseMode must be responseNode.';\n} else {\n  title = 'ask-human door returned HTTP ' + code;\n  why = 'Unexpected status. The path answered, so it is registered; something past '\n      + 'the webhook is wrong.';\n}\n\nconst blind = (code === 401 || code === 403);\nst.lastFault = blind ? 'blind' : 'down';\nconst mins = fails * 15;\n\nreturn [{ json: {\n  severity: 'error',\n  title: title + (reminder ? ' - still down' : ''),\n  message: [\n    'POST /webhook/ask-human returned ' + (code || 'no response') + ' on '\n      + fails + ' consecutive checks (~' + mins + ' minutes).',\n    '',\n    why,\n    '',\n    blind\n      ? 'IMPACT: unknown. This alert means the CHECK is broken, not necessarily the door.'\n      : 'IMPACT: agents cannot reach a human mid-run. A run that needs one will not ask '\n        + 'and will not fail loudly - it proceeds without the answer.',\n  ].join(NL),\n  source: 'seam-heartbeat',\n} }];"
+      }
+    },
+    {
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        940,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Knock on /ask-human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Knock on /ask-human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Knock on /ask-human": {
+      "main": [
+        [
+          {
+            "node": "Decide (2 strikes)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide (2 strikes)": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

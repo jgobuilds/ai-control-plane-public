@@ -1,0 +1,61 @@
+AI Control Plane
+Copyright 2026 Brightside Data LLC
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE.
+
+--------------------------------------------------------------------------------
+WHY AGPL, AND WHAT IT DOES AND DOES NOT COVER
+--------------------------------------------------------------------------------
+
+AGPL-3.0 was chosen over a permissive licence deliberately. This is software
+that gets RUN AS A SERVICE, and AGPL section 13 is the only common licence whose
+reciprocity reaches that case: run a modified version where others can use it
+over a network, and you must offer them its source. A permissive licence would
+allow a modified, closed fork to be operated as a competing service with nothing
+given back.
+
+The copyright is held by a single entity, so commercial licensing on different
+terms is available on request for anyone whose circumstances make AGPL
+unworkable. See CONTRIBUTING.md for why contributions require a copyright
+assignment — without it that option disappears permanently.
+
+The AGPL applies to THE CODE IN THIS REPOSITORY.
+
+It does NOT re-license the third-party software this project orchestrates. This
+is a control plane: it runs, routes and governs components it does not ship, and
+those components carry their own terms. Read this before assuming what you may
+do with the stack as a whole — particularly commercially.
+
+The one that most often surprises people:
+
+  n8n — the orchestration runtime this project schedules workflows in.
+  n8n is distributed under the SUSTAINABLE USE LICENSE ("fair-code"), which is
+  NOT an OSI-approved open-source licence. Among its restrictions, hosting n8n
+  and charging others for access is prohibited, and selling a product or service
+  whose value substantially depends on n8n requires a separate commercial
+  agreement with n8n. Internal use and tenant work are permitted.
+  See: https://docs.n8n.io/sustainable-use-license/
+
+Other components have their own licences, including (non-exhaustive) the vendor
+CLIs invoked by the runners (Claude Code, Gemini CLI — governed by their vendors'
+terms of service and your subscription), the container base images, and any
+Node/Python packages installed at build time.
+
+WHAT THIS MEANS IN PRACTICE
+
+  * Using this code, modifying it, and running it yourself: the AGPL applies to
+    our code, and you must still honour each component's own terms.
+  * Running a MODIFIED version as a network service: AGPL section 13 requires you
+    to offer your users the corresponding source of your modified version.
+  * Building a commercial product on the stack AS ASSEMBLED: no licence on this
+    repository can grant that on its own, because n8n's terms govern n8n
+    regardless of how we license our own work. A commercial licence from us
+    covers OUR code only; you would still need n8n's agreement.
+  * Replacing n8n with a permissively-licensed orchestrator removes that specific
+    constraint. See docs/decisions/ for the analysis.
+
+None of the above is legal advice. If you intend to commercialise anything built
+on this stack, have counsel review the component licences — starting with n8n's.

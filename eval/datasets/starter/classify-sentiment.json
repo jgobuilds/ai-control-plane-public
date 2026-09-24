@@ -1,0 +1,13 @@
+{
+  "id": "starter-classify-sentiment",
+  "scope": "starter",
+  "task_type": "classify",
+  "action": "advise",
+  "prompt": "Classify the sentiment of this sentence as exactly one word (positive, negative, or neutral). Reply with only the label.\n\nSENTENCE:\nThe onboarding was smooth and the team was delighted with the result.",
+  "grader": {
+    "type": "contains",
+    "value": "positive"
+  },
+  "source": "example",
+  "created": "2026-07-19"
+}

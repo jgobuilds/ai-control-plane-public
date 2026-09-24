@@ -1,0 +1,196 @@
+{
+  "id": "aicp-retention-sweep",
+  "name": "Retention sweep (scheduled lane)",
+  "meta": {
+    "description": "Retention visibility lane — DRY-RUN ONLY. A Schedule Trigger calls the `lanes` service (GET lanes:8081/retention, header x-lanes-token), which runs scripts/retention_sweep.py WITHOUT --apply and returns the report. The endpoint has no apply parameter at all, so this lane cannot delete a file or prune the vault however it is called — enforced as a capability, not a setting. The PII token vault is deliberately NOT mounted into `lanes` (the vault never leaves the scrubber), so vault pruning is NOT inspected and the message says so; the raw report's '0 vault entries prunable' line must not be read as a finding. Actually enforcing retention stays a human-invoked action on the host. n8n keeps the schedule, execution log and Notify seam — see docs/decisions/0006. Deploy with scripts/n8n_bootstrap.py."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "cdcdcdcd-0000-0000-0000-000000000001",
+      "name": "Daily (06:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://lanes:8081/retention",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lanes-token",
+              "value": "={{ $env.LANES_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cdcdcdcd-0000-0000-0000-000000000002",
+      "name": "Run retention sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The lanes /retention endpoint is DRY-RUN by construction — it cannot apply.\n// No backslash escapes anywhere (String.fromCharCode(10) for newlines): an\n// unquoted-heredoc rewrite once turned an escape into a literal newline inside a\n// single-quoted string and produced a lane that threw on its first run.\nconst d = $input.first().json || {};\nconst NL = String.fromCharCode(10);\nif (typeof d.applied === 'undefined') {\n  return [{ json: {\n    severity: 'error',\n    title: 'Retention lane: call failed',\n    message: ['The retention lane did not return a usable response.',\n              JSON.stringify(d).slice(0, 500)].join(NL),\n    source: 'retention-sweep'\n  } }];\n}\nconst lines = [];\n// Lead with the caveat. The raw report prints '0 vault entries prunable', which\n// on its own reads as 'the vault is clean' rather than 'the vault was not read'.\nif (!d.vault_inspected) {\n  lines.push('CAVEAT: ' + d.note + '. Any vault figure below is NOT a finding.');\n  lines.push('');\n}\nlines.push('Nothing was deleted — this lane is dry-run only and has no apply path.');\nlines.push('');\nlines.push(d.report || '(no report)');\nconst warn = d.exit_code !== 0;\nif (warn) { lines.push(''); lines.push('stderr: ' + (d.stderr || '')); }\nreturn [{ json: {\n  severity: warn ? 'warn' : 'info',\n  title: warn ? 'Retention sweep — dry-run FAILED' : 'Retention sweep — dry-run, nothing deleted',\n  message: lines.join(NL),\n  source: 'retention-sweep'\n} }];"
+      },
+      "id": "cdcdcdcd-0000-0000-0000-000000000003",
+      "name": "Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "r1r1r1r1-0000-0000-0000-000000000009",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "id": "ondemand",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        460
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    }
+  ],
+  "connections": {
+    "Run retention sweep": {
+      "main": [
+        [
+          {
+            "node": "Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Run retention sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily (06:00)": {
+      "main": [
+        [
+          {
+            "node": "Run retention sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "aicp-error-trigger"
+  },
+  "active": false
+}

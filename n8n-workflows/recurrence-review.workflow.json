@@ -1,0 +1,200 @@
+{
+  "id": "aicp-recurrence-review",
+  "name": "Recurrence review (scheduled)",
+  "meta": {
+    "description": "Weekly review of reliability/recurrence.yaml against what has actually failed. Reads GET lanes:8081/recurrence, which is read-only by construction: the endpoint never collects, so it cannot write to the read-only audit mount. Warns on three separate things — a pattern seen twice with no harness fix, a disposition expiring, and a source nobody has collected from. The third matters because a blind source reports zero and a quiet week reports zero, and only one of those is good news."
+  },
+  "settings": {
+    "errorWorkflow": "aicp-error-trigger"
+  },
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Weekly (Mon 08:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "manual",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        460
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch recurrence report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        300
+      ],
+      "parameters": {
+        "url": "http://lanes:8081/recurrence?days=90",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lanes-token",
+              "value": "={{ $env.LANES_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "format",
+      "name": "Format recurrence review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Turn the recurrence report into a message a person will act on.\n//\n// LEAD WITH THE OUTCOME, not the job (notification-taxonomy rule 1). \"2 patterns\n// need a harness fix\" is a title; \"Recurrence review ran\" makes the reader open\n// the body to find out whether anything happened, every week, forever.\n//\n// THREE THINGS CAN BE WRONG, and they are NOT the same alarm:\n//   1. harness debt — something failed twice and nobody decided anything.\n//   2. a disposition is expiring — a dated promise to look again, coming due.\n//      Said BEFORE it turns into a red gate: a prompt, not an ambush.\n//   3. the data is stale — nobody has run `collect`, so the CI half of the\n//      register is blind. This is the one that hides: no CI failures and no\n//      collection produce the identical empty list, and only one of them is good\n//      news. It is a WARN, never a quiet all-clear.\nconst d = $input.first().json || {};\nconst NL = String.fromCharCode(10);\nconst src = 'recurrence-review';\n\nif (!Array.isArray(d.rows)) {\n  return [{ json: { severity: 'warn', source: src,\n    title: 'Recurrence lane: the lane call itself failed',\n    message: ['The response had no shape we recognise — the register was not read.',\n              JSON.stringify(d).slice(0, 400)].join(NL) } }];\n}\n\nconst debt = d.harnessDebt || [];\nconst due = d.dispositionsDue || [];\nconst expired = due.filter(x => x.expired);\nconst errs = d.registerErrors || [];\n\n// A source nobody has collected from is blind, not quiet.\nconst blind = Object.entries(d.sources || {})\n  .filter(([, note]) => /collect` run|STALE|unavailable|not set/i.test(String(note)))\n  .map(([name, note]) => name + ': ' + note);\n\nconst severity = (debt.length + expired.length + errs.length + blind.length) > 0\n  ? 'warn' : 'info';\n\nlet title;\nif (debt.length) {\n  title = debt.length + ' pattern(s) failed twice with no harness fix — ' +\n          String(debt[0].signature).slice(0, 60);\n} else if (expired.length) {\n  title = expired.length + ' recurrence disposition(s) EXPIRED — re-decide them';\n} else if (errs.length) {\n  title = 'The recurrence register could not be read';\n} else if (blind.length) {\n  title = 'Recurrence: nothing recurring, but ' + blind.length + ' source(s) blind';\n} else if (due.length) {\n  title = due.length + ' recurrence disposition(s) come due within 14 days';\n} else {\n  title = 'Recurrence: nothing new failed twice';\n}\n\nconst lines = [];\nif (debt.length) {\n  lines.push('NEEDS A HARNESS FIX — seen >= ' + d.threshold + 'x, undispositioned:');\n  debt.forEach(r => lines.push('  ' + r.count + 'x  ' + r.signature + NL +\n    '        first ' + String(r.first).slice(0, 10) + ', last ' +\n    String(r.last).slice(0, 10) + ', via ' + (r.sources || []).join('+')));\n  lines.push('  -> fix the harness, or file it in reliability/recurrence.yaml');\n  lines.push('');\n}\nif (due.length) {\n  lines.push('DISPOSITIONS COMING DUE (a dated promise to look again):');\n  due.forEach(x => lines.push('  ' + (x.expired ? 'EXPIRED ' : 'due ') + x.until +\n    '  [' + x.status + '] ' + (x.title || x.match) +\n    (x.next_action ? NL + '        next: ' + String(x.next_action).slice(0, 200) : '')));\n  lines.push('');\n}\nif (errs.length) {\n  lines.push('REGISTER ERRORS:');\n  errs.forEach(e => lines.push('  ' + e));\n  lines.push('');\n}\n\n// Coverage before totals — the same rule the digest follows. A count means\n// nothing until you know what it was counted over.\nlines.push('Sources (' + d.windowDays + 'd window):');\nObject.entries(d.sources || {}).forEach(([k, v]) => lines.push('  ' + k + ': ' + v));\nif (blind.length) {\n  lines.push('  NOTE: a blind source reports zero, which is indistinguishable from a');\n  lines.push('        quiet week. Run `python scripts/recurrence.py collect` on the host.');\n}\nlines.push('');\nlines.push('Everything counted (' + d.registerEntries + ' register entry(ies)):');\n(d.rows || []).forEach(r => lines.push('  ' + String(r.count).padStart(3) + 'x  ' +\n  String(r.status || '').padEnd(16) + ' ' + String(r.signature).slice(0, 70)));\nif (!d.rows.length) {\n  lines.push('  (nothing at all — see the source notes above)');\n}\n\nreturn [{ json: { severity, source: src, title, message: lines.join(NL) } }];\n"
+      }
+    },
+    {
+      "id": "notify",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Weekly (Mon 08:00)": {
+      "main": [
+        [
+          {
+            "node": "Fetch recurrence report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Fetch recurrence report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch recurrence report": {
+      "main": [
+        [
+          {
+            "node": "Format recurrence review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format recurrence review": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false
+}

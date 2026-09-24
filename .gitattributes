@@ -1,0 +1,10 @@
+# Batch files are parsed line-by-line by cmd.exe and MUST be CRLF. With LF-only
+# endings every `REM comment` line executes as the command `M`, which is exactly
+# how scripts/collect_recurrence.cmd failed the first time it ran. Checked out
+# with CRLF regardless of the platform's default.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# PowerShell is tolerant of LF, but keeping the Windows-only scripts consistent
+# means one rule to remember rather than two.
+*.ps1 text eol=crlf

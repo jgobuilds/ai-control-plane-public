@@ -1,0 +1,116 @@
+# Accepted security findings — the documented exception list for the Trivy scan
+# in .github/workflows/security-scan.yml.
+#
+# Same discipline as job-applications' `pip-audit --ignore-vuln`: an exception is
+# allowed, but it must be WRITTEN DOWN with a reason and a revisit trigger. A
+# silently-suppressed finding is indistinguishable from one nobody noticed.
+#
+# Format: one finding ID per line. Every entry MUST carry, in a comment above it:
+#   - what it is, and why it is accepted (not merely inconvenient)
+#   - the compensating control, if any
+#   - what would make us revisit
+#
+# An entry with no reason is not an exception, it is a hole. Prefer upgrading the
+# pinned digest over adding a line here.
+
+
+# ---------------------------------------------------------------------------
+# DS-0002 (HIGH) — "Specify at least 1 USER command with a non-root user".
+# Affects claude-runner, gemini-runner and scrubber. router and lanes already run
+# non-root (USER node / USER lanes).
+#
+# Surfaced 2026-07-25, and ONLY because the Dockerfiles were repaired: while the
+# FROM lines were unparseable, Trivy's config scanner silently found nothing.
+# A scanner with nothing to say is not the same as a clean scan.
+#
+# WHY IT CANNOT SIMPLY BE FIXED — verified 2026-07-25, not assumed:
+#  * scrubber: /vault and /workspace are bind mounts on a Windows drive exposed to
+#    WSL over 9p/drvfs, mounted with uid=0;gid=0 SYNTHESIZED and no metadata
+#    option. Everything under it reads as root:root and `chown` is a silent no-op
+#    (tested). `USER node` (uid 1000) would leave the scrubber unable to write the
+#    PII vault at all. This is a platform constraint, not an oversight.
+#  * claude-runner / gemini-runner: carry cap_add NET_ADMIN and run
+#    init-firewall.sh, which sets iptables at startup and requires root. The real
+#    fix is to drop privileges AFTER firewall setup (gosu), which touches the
+#    startup path and the CLI auth volumes.
+#
+# COMPENSATING CONTROL ADDED 2026-07-25 — since the uid cannot change, take away
+# what root can DO: scrubber, router and lanes now run with `cap_drop: [ALL]` and
+# `no-new-privileges:true`. Verified: CapEff=0000000000000000 in all three, and
+# all three still function (scrubber writes vault + workspace and serves; lanes
+# /health returns ok; router responds). Root inside a container with zero
+# capabilities and no escalation path is a substantially smaller target.
+# Plus: all are internal to agentnet with NO published host port, the runners are
+# default-deny egress, and the scrubber needs no egress at all.
+#
+# STILL THE WEAKEST EXCEPTION HERE. Reduced, not resolved.
+# REVISIT: (a) move /vault and /workspace to NAMED DOCKER VOLUMES, which Docker
+# owns and can chown, making USER node possible — the real fix, and an
+# architectural change worth doing deliberately; (b) or enable WSL metadata mounts
+# (/etc/wsl.conf), noting that changes ownership semantics for every project on
+# that drive; (c) runners — drop-after-firewall with gosu. Monthly review.
+DS-0002
+
+# ---------------------------------------------------------------------------
+# CVE-2026-60002 — OpenSSH: use-after-free during host key exchange.
+# Found by the scheduled scan on 2026-09-01/02, in n8nio/n8n (openssh
+# 10.3_p1-r0, across 7 sub-packages). Alpine fixed it in 10.3_p1-r1.
+#
+# WHY ACCEPTED — not merely inconvenient: there is no patched n8n image to move
+# to. Checked on 2026-09-03 by resolving and scanning every current tag —
+# 2.36.9 (deployed), 2.37.7 and 2.38.3 (published that morning) ALL carry
+# 10.3_p1-r0. n8n has not rebuilt against the patched alpine package yet, so
+# upgrading is not an available action, and the image is a Docker Hardened Image
+# with the package manager removed, so patching it ourselves is not either.
+#
+# COMPENSATING CONTROLS — the vulnerable code is unreachable in this deployment:
+#   - No sshd runs in the container (checked: 0 matching processes). The image
+#     ships the openssh package; nothing starts it.
+#   - No workflow uses an SSH or Git node. The complete set of node types across
+#     all 18 imported workflows is: code, convertToFile, errorTrigger,
+#     executeWorkflow, executeWorkflowTrigger, httpRequest, if, manualTrigger,
+#     noOp, readWriteFile, scheduleTrigger, set, switch, wait, webhook.
+#   - n8n binds 127.0.0.1 and [::1] only, on the internal agentnet.
+# The CVE needs an SSH client negotiating with a hostile server, or a server
+# accepting connections. Neither code path is invoked here.
+#
+# REVISIT: at the monthly image-policy review (context/image-policy.json
+# reviewBy), check whether any published n8n tag ships openssh >= 10.3_p1-r1;
+# when one does, re-pin and DELETE this entry. Revisit IMMEDIATELY if any
+# workflow gains an SSH or Git node, or if anything starts sshd in that
+# container — either would create the missing reachability.
+CVE-2026-60002
+
+# ---------------------------------------------------------------------------
+# CVE-2026-59873 — node-tar: DoS via a crafted gzip bomb.
+# Found by the first real run of this scan (2026-07-25), in n8nio/n8n (tar
+# 7.5.16) and the node:22-bookworm-slim base (7.5.11). Fixed upstream in 7.5.19.
+#
+# RESTORED 2026-09-17 — AND WHY IT WAS EVER DELETED. On 2026-09-03 this entry was
+# removed because the re-pinned node digest "shipped tar 7.5.19". It did — but
+# that digest was node:latest (Node 26, full Debian 13), taken from a Dependabot
+# PR without checking what it pinned, not node:22-bookworm-slim. The exception
+# was only unnecessary because the image had silently changed. Re-verified
+# 2026-09-17 against node:22-bookworm-slim as resolved that day (Node 22.23.2):
+# npm's bundled tar is still 7.5.11, and it is the ONLY CRITICAL Trivy reports.
+# n8nio/n8n 2.36.9 does not carry it: the scheduled scan passed with this
+# entry absent every night from 2026-09-03 to 2026-09-12.
+#
+# WHY ACCEPTED — not merely inconvenient: no node:22-bookworm-slim build ships a
+# patched npm yet, so upgrading within the pinned major is not an available
+# action; moving major version to escape a DoS in a build-time tool would trade a
+# contained finding for an untested runtime change across every service.
+#
+# COMPENSATING CONTROLS: the vulnerable code is npm's bundled tar, used at BUILD
+# time from a lockfile, never on untrusted runtime input. The services built on
+# this base (router, scrubber, claude-runner, gemini-runner) are HTTP services
+# that do not extract archives — re-checked 2026-09-17: no tar/zip/gunzip/extract
+# call in router, scrubber, either runner, lanes or any n8n workflow. Severity is
+# availability-only — no code execution, no data disclosure.
+#
+# REVISIT: at the monthly image-policy review (context/image-policy.json
+# reviewBy), check whether node:22-bookworm-slim ships tar >= 7.5.19; when it
+# does, re-pin and DELETE this entry. Revisit immediately if anything starts
+# extracting archives from an external source (e.g. drive-sync handling zipped
+# attachments), because that would create the missing reachability.
+CVE-2026-59873

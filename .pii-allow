@@ -1,0 +1,43 @@
+# .pii-allow — reviewed exemptions for the PII/secret scanner.
+#
+# One regex per line, matched against the WHOLE LINE. Every entry here is a
+# value that was inspected and found to be synthetic. This file is deliberately
+# small and specific: it exempts VALUES, never files or paths, so a real secret
+# added to an exempted file is still caught.
+#
+# Why this file exists at all: `pii_scan.py --history` returned 26 findings, all
+# of them the guardrail tests proving the guardrails detect secrets. A scan that
+# can never come back clean trains everyone to ignore it — the alarm-fatigue
+# failure `ai-standards/references/notification-taxonomy.md` exists to prevent.
+# Exempting the fixtures is what makes the next real finding mean something.
+#
+# Reviewed 2026-07-26. Re-review before adding any entry: an allowlist is the
+# one place where being lazy silently disables the control.
+#
+# NOT used here on purpose: the file-level `pii-scan: ignore-file` marker. These
+# are ordinary test files that happen to contain fixtures, not dedicated corpora,
+# so a whole-file exemption would blind the scanner to a real secret landing in
+# them later.
+
+# AWS's own documented example access key ID, from their public docs. It is the
+# canonical "not a real key" value and cannot authenticate to anything.
+# Used in: tests/guardrails_test.py, tests/unit/guardrails.test.mjs,
+# tests/ci_diagnose_test.py — all asserting that output scanning catches it.
+AKIAIOSFODNN7EXAMPLE
+
+# Truncated PEM placeholders in test fixtures: a PRIVATE KEY header followed by
+# an escaped \n and a body of at most a dozen base64 characters, then a closing
+# quote or backslash. A real RSA key body runs to ~1600 characters, so the length
+# bound is what makes this safe — a genuine key pasted into a source string is
+# still flagged.
+BEGIN [A-Z ]*PRIVATE KEY-----\\n(MII|MIG)[A-Za-z0-9+/=.]{0,12}["'\\]
+
+# A PEM header as a COMPLETE quoted string — opening quote, header, closing
+# quote — with no key body anywhere on the line. This is the detector's
+# header→token mapping in tests/ci_diagnose_test.py, and it appears only in
+# history: the current file builds the header at runtime via `_synth(...)` so the
+# literal never lands in source, which is the better fix. History blobs cannot be
+# edited, so they are exempted here instead.
+# Safe because a header alone is not key material — the quotes bound it, so no
+# base64 body can be present on the line.
+["']-----BEGIN [A-Z ]+PRIVATE KEY-----["']

@@ -1,0 +1,23 @@
+# The lanes service's ONLY runtime dependency, and it took an argument to add.
+#
+# This image was deliberately stdlib-only. The /recurrence endpoint broke that:
+# reliability/recurrence.yaml is a human-edited file whose readability comes from
+# YAML block scalars, and without a parser the endpoint returned every signature
+# as `undispositioned` — it would have reported "4 patterns need a harness fix"
+# every Monday about four patterns that are all dispositioned. Exactly the class
+# of quietly-wrong monitoring the recurrence register exists to catch, found by
+# calling the endpoint instead of assuming it worked.
+#
+# The three alternatives, and why they lost:
+#   hand-rolled mini-parser  the register uses block scalars, nested maps and
+#                            lists; a parser that mostly works is worse than a
+#                            dependency, because it fails on the entry someone
+#                            wrote carefully.
+#   generate a JSON twin     a generated twin of a hand-edited file is drift
+#                            waiting to happen — this repo has hit that four times.
+#   register in JSON         it is prose. JSON would make it unwritable, and an
+#                            unwritable register does not get written in.
+#
+# PyYAML has no transitive dependencies, so the surface is one package. Pinned,
+# and Dependabot watches this file (see .github/dependabot.yml, pip -> /lanes).
+PyYAML==6.0.3

@@ -1,0 +1,13 @@
+{
+  "id": "starter-ping-pong",
+  "scope": "starter",
+  "task_type": "transform",
+  "action": "advise",
+  "prompt": "Respond with exactly the single word: pong",
+  "grader": {
+    "type": "contains",
+    "value": "pong"
+  },
+  "source": "example",
+  "created": "2026-07-19"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "cost-tiering-router",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deterministic-first, cheapest-capable-model router across claude/gemini runners",
+  "main": "server.js"
+}

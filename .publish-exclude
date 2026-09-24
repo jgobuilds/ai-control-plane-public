@@ -1,0 +1,29 @@
+# Files NOT published to the public snapshot.
+#
+# `change-safety.md`: "Publishing is a list, not a side effect." This is that
+# list. publish_snapshot.py REFUSES if this file is missing, because publishing
+# everything by accident looks identical to publishing everything on purpose —
+# which is how the first snapshot shipped all three sections below.
+
+# BUSINESS ASSESSMENT. Competitive positioning, willingness-to-pay analysis, and
+# this project's own kill criteria — including the conclusion that there is no
+# defensible commercial wedge. That is a strategy document about ourselves; the
+# engine is what we publish, not our verdict on its market.
+idea-dossier/
+
+# OPEN WEAKNESSES AND WORKING STATE. The gap-closure plan is a live list of what
+# is not yet fixed, including threat-model findings still open. Publishing a
+# roadmap of your own unpatched gaps is a different act from publishing the code.
+docs/plans/
+HANDOFF.md
+
+# Local scratch — never part of a release.
+generated/
+
+# DEPENDABOT BELONGS ON THE WORKING REPO, NOT THE SNAPSHOT. The public repo is a
+# single force-pushed commit, so a bump PR opened against it can never be merged
+# — the branch it targets is replaced on the next publish. Two such PRs were
+# sitting there un-mergeable before anyone noticed, which is noise on the repo
+# and a dead end for anyone who clicked them. The bumps still happen here, where
+# they can actually land and flow out through the next snapshot.
+.github/dependabot.yml

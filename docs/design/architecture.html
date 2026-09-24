@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Control Plane — live architecture</title>
+<style>
+:root{--ground:#f6f8fa;--panel:#fff;--panel2:#eef2f6;--ink:#16202b;--soft:#55647a;
+--line:#dbe3ec;--accent:#b4762c;--accent-s:rgba(180,118,44,.12);--ok:#2f7d55;
+--ok-s:rgba(47,125,85,.12);--idle:#78899c;--idle-s:rgba(120,137,156,.14);
+--warn:#b4543f;--warn-s:rgba(180,84,63,.12);
+--mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}
+@media(prefers-color-scheme:dark){:root{--ground:#0e1319;--panel:#161d26;--panel2:#1c2530;
+--ink:#e6edf5;--soft:#93a3b5;--line:#263140;--accent:#d99a4e;--accent-s:rgba(217,154,78,.14);
+--ok:#52ab7a;--ok-s:rgba(82,171,122,.15);--idle:#7b8b9d;--idle-s:rgba(123,139,157,.16);
+--warn:#d47259;--warn-s:rgba(212,114,89,.15);}}
+*{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);
+font-family:var(--sans);line-height:1.55;padding:clamp(20px,4vw,52px);}
+.page{max-width:1060px;margin:0 auto;display:flex;flex-direction:column;gap:32px;}
+h1{font-family:var(--mono);font-size:clamp(21px,3vw,29px);font-weight:600;margin:0;letter-spacing:-.015em;}
+h2{font-family:var(--mono);font-size:14px;font-weight:600;margin:0 0 2px;letter-spacing:.04em;
+text-transform:uppercase;color:var(--soft);}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+color:var(--accent);margin:0 0 8px;}
+header{border-bottom:1px solid var(--line);padding-bottom:22px;}
+p{margin:0;color:var(--soft);max-width:70ch;}
+section{display:flex;flex-direction:column;gap:13px;}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;}
+.chip{font-family:var(--mono);font-size:12px;padding:5px 10px;border-radius:3px;
+border:1px solid var(--line);background:var(--panel);color:var(--soft);font-variant-numeric:tabular-nums;}
+.chip b{color:var(--ink);}.chip.on{border-color:var(--ok);background:var(--ok-s);color:var(--ok);}
+.chip.gap{border-color:var(--warn);background:var(--warn-s);color:var(--warn);}
+.zone{border:1px solid var(--line);border-radius:5px;background:var(--panel);padding:16px;
+display:flex;flex-direction:column;gap:12px;}
+.zone.exposed{border-left:3px solid var(--warn);}.zone.internal{border-left:3px solid var(--ok);}
+.zone-h{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline;}
+.zone-n{font-family:var(--mono);font-size:13px;font-weight:600;}
+.zone-note{font-family:var(--mono);font-size:11px;color:var(--soft);}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:9px;}
+.svc{border:1px solid var(--line);border-radius:4px;background:var(--panel2);padding:10px 12px;
+display:flex;flex-direction:column;gap:4px;}.svc.new{border-color:var(--accent);}
+.svc-n{font-family:var(--mono);font-size:13px;font-weight:600;}
+.svc-m{font-family:var(--mono);font-size:10.5px;color:var(--soft);word-break:break-all;}
+.tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+color:var(--accent);background:var(--accent-s);padding:2px 6px;border-radius:2px;align-self:flex-start;}
+.mchips{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;}
+.mchip{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:2px;}
+.m-ro{background:var(--idle-s);color:var(--idle);}.m-rw{background:var(--warn-s);color:var(--warn);}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:5px;background:var(--panel);}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);}
+tr:last-child td{border-bottom:none;}td.m{font-family:var(--mono);font-size:12px;}
+.pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 8px;border-radius:2px;white-space:nowrap;}
+.p-on{background:var(--ok-s);color:var(--ok);}.p-idle{background:var(--idle-s);color:var(--idle);}
+.p-gap{background:var(--warn-s);color:var(--warn);}
+.flow{display:flex;flex-wrap:wrap;gap:7px;align-items:center;}
+.step{border:1px solid var(--line);border-radius:4px;background:var(--panel);padding:8px 11px;
+font-family:var(--mono);font-size:12px;}.arrow{color:var(--accent);font-family:var(--mono);}
+footer{border-top:1px solid var(--line);padding-top:16px;font-family:var(--mono);font-size:11px;color:var(--soft);}
+code{font-family:var(--mono);font-size:.9em;background:var(--panel2);padding:1px 5px;border-radius:3px;color:var(--ink);}
+</style></head><body><div class='page'>
+<header><p class="eyebrow">AI Control Plane · live stack</p><h1>Architecture &amp; implementation status</h1><p>Generated from the running containers on 2026-08-31 06:51 — <code>python scripts/gen_architecture.py</code>. Not written from memory: components, ports, mounts and workflow state are read live.</p><div class="chips"><span class="chip on"><b>7</b> services up</span><span class="chip on"><b>12</b> lanes active</span><span class="chip"><b>1</b> host ports (localhost)</span><span class="chip gap"><b>18 of 18</b> workflows loaded</span></div></header>
+<section><h2>Trust boundary</h2><p>Only host-exposed services are reachable off the box; everything that does work is internal and token-gated.</p><div class="zone exposed"><div class="zone-h"><span class="zone-n">Reachable from host</span><span class="zone-note">bound to 127.0.0.1 — not the LAN</span></div><div class="grid"><div class="svc"><span class="svc-n">n8n</span><span class="svc-m">127.0.0.1:5678-&gt;5678/tcp, [::1]:5678-&gt;5678/tcp</span><span class="svc-m">a9e2e3c8006e</span><div class="mchips"><span class="mchip m-rw\n">/home/node/.n8n rw\n</span></div></div></div></div><div class="zone internal"><div class="zone-h"><span class="zone-n">Internal — ai-control-plane_agentnet</span><span class="zone-note">no host port; each hop carries a token</span></div><div class="grid"><div class="svc"><span class="svc-n">claude-runner-commons</span><span class="svc-m">8080/tcp</span><span class="svc-m">ai-control-plane-claude-runner-commons</span></div><div class="svc"><span class="svc-n">claude-runner-delivery</span><span class="svc-m">8080/tcp</span><span class="svc-m">ai-control-plane-claude-runner-delivery</span></div><div class="svc"><span class="svc-n">gemini-runner-commons</span><span class="svc-m">8080/tcp</span><span class="svc-m">ai-control-plane-gemini-runner-commons</span></div><div class="svc new"><span class="tag">new</span><span class="svc-n">lanes</span><span class="svc-m">8081/tcp</span><span class="svc-m">ai-control-plane-lanes:latest</span></div><div class="svc"><span class="svc-n">router</span><span class="svc-m">8080/tcp</span><span class="svc-m">ai-control-plane-router</span></div><div class="svc"><span class="svc-n">scrubber</span><span class="svc-m">8080/tcp</span><span class="svc-m">ai-control-plane-scrubber</span></div></div></div></section>
+<section><h2>Scheduled lane flow</h2><p>n8n cannot run Python (hardened image), so it drives the lanes over HTTP — schedule, log, gate and notification stay in n8n.</p><div class="flow"><span class="step">schedule</span><span class="arrow">→</span><span class="step">lanes (python)</span><span class="arrow">→</span><span class="step">parse</span><span class="arrow">→</span><span class="step">gate</span><span class="arrow">→</span><span class="step">Notify</span><span class="arrow">→</span><span class="step">Slack</span></div></section>
+<section><h2>Workflows — implementation status</h2><p><b>18 of 18</b> non-example workflow files are loaded into n8n. Placeholders still carry <code>REPLACE_WITH</code> or need an external credential.</p><div class="scroll"><table><thead><tr><th>Id</th><th>Workflow</th><th>Cadence</th><th>Status</th></tr></thead><tbody><tr><td class="m">aicp-approval-gate</td><td>Approval gate (reusable)</td><td class="m">on demand</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-ask-question</td><td>Ask a human (agent question gate)</td><td class="m">on demand</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-ask-webhook</td><td>Ask a human (HTTP door for the runner)</td><td class="m">on demand</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-daily-digest</td><td>Daily digest lane (scheduled, human-awareness digest tier)</td><td class="m">daily 07:30</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-dispatch</td><td>dispatch</td><td class="m">every 10 min</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-error-trigger</td><td>Global Error Handler</td><td class="m">on demand</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-eval-drift</td><td>Eval / drift lane (scheduled, AG-3)</td><td class="m">weekly 07:00</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-notify</td><td>Notify (channel-abstracted)</td><td class="m">on demand</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-research-watch</td><td>Research watch (scheduled)</td><td class="m">weekly 07:30</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-retention-sweep</td><td>Retention sweep (scheduled lane)</td><td class="m">daily 06:00</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-seam-heartbeat</td><td>Seam heartbeat (ask-human door)</td><td class="m">every 15 min</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-recurrence-review</td><td>Recurrence review (scheduled)</td><td class="m">weekly 08:00</td><td><span class="pill p-on">active</span></td></tr><tr><td class="m">aicp-deliverables</td><td>Deliverables → Drive (rehydrated)</td><td class="m">every 15 min</td><td><span class="pill p-idle">loaded</span></td></tr><tr><td class="m">aicp-dependency-bumps</td><td>Dependency bumps (scheduled lane, AG-3)</td><td class="m">weekly 06:00</td><td><span class="pill p-idle">loaded</span></td></tr><tr><td class="m">aicp-drive-sync</td><td>Drive → workspace sync (scrubbed)</td><td class="m">every 15 min</td><td><span class="pill p-idle">loaded</span></td></tr><tr><td class="m">aicp-feedback</td><td>Feedback → eval inbox (thumbs-down capture, SCAFFOLD)</td><td class="m">on demand</td><td><span class="pill p-idle">loaded</span></td></tr><tr><td class="m">aicp-incident-responder</td><td>Incident responder (event-driven skills, AG-3)</td><td class="m">on demand</td><td><span class="pill p-idle">loaded</span></td></tr><tr><td class="m">aicp-promote-skill</td><td>Promote skill (scrub → review → commit)</td><td class="m">on demand</td><td><span class="pill p-idle">loaded</span></td></tr></tbody></table></div></section>
+<footer>Generated from <code>docker ps</code>, <code>docker inspect</code> and <code>n8n list:workflow</code> against the running stack · 2026-08-31 06:51 · CI cannot check this for staleness (no docker daemon) — regenerate after changing the stack.</footer>
+</div></body></html>

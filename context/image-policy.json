@@ -1,0 +1,85 @@
+{
+  "_comment": "Container image pinning policy. Every third-party image and Dockerfile base image is pinned to a DIGEST, not a tag — a tag is a moving target, so `:latest` means you cannot say what you are running until you look. Digests make the stack reproducible and make an upgrade a visible, reviewable diff. BUT: pinning WITHOUT an update process is worse than :latest, because you silently freeze on a vulnerable image. That is what reviewBy exists for — scripts/image_policy_check.py FAILS once the date passes, the same forcing-function pattern as context/model-policy.json. See ai-standards/references/dependency-security.md.",
+  "reviewBy": "2026-09-30",
+  "reviewCadence": "monthly",
+  "_reviewBy_note": "Monthly, not quarterly: the orchestration tier in this stack has a heavy critical-CVE record (n8n shipped multiple CVSS 9.4-10.0 RCEs in 2026). Re-resolve digests, read the changelogs, re-run the scan, then move this date.",
+  "pinnedAt": "2026-08-31",
+  "images": [
+    {
+      "ref": "n8nio/n8n",
+      "tag": "2.36.9",
+      "version": "2.36.9",
+      "digest": "sha256:a9e2e3c8006ed453238266669ea1274be7136f515abe290a2f75a0ab9044c93d",
+      "where": "docker-compose.yml (n8n service)",
+      "risk": "HIGHEST in the stack. Executes user-supplied workflow expressions by design, so arbitrary code execution IS the product and the attack surface is structural. 2026 CVEs incl. CVE-2026-21858 (CVSS 10.0 unauth RCE), CVE-2026-25049 (9.4 unauth RCE), CVE-2026-27495/27497 (9.4). Mitigated here by binding to 127.0.0.1 only and holding no repo mount.",
+      "verifiedNotVulnerable": "2.36.9 clears every published 2.x advisory floor (max floor 2.36.2, from the 2026-08-19 batch). Checked 2026-08-31 against the GitHub Security Advisory API for n8n-io/n8n, not a changelog. Trivy on this digest: 3 fixed HIGH (libcrypto3, libssl3, nodemailer), 0 CRITICAL.",
+      "previousDigest": "sha256:23a26975c21aa6f7113286668b35e2831ec898d3a7fbfa1ac8ff16f1bdf88c37",
+      "repinnedAt": "2026-08-31"
+    },
+    {
+      "ref": "python",
+      "tag": "3.12-alpine",
+      "digest": "sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a",
+      "where": "lanes/Dockerfile",
+      "risk": "Low. stdlib only — no pip install, so no third-party dependency surface at all. Runs non-root with read-only mounts.",
+      "previousDigest": "sha256:8edbf9e42c7fb168b9c523718ed907117e6d2e60f5889c0c499bbda3a787da53",
+      "repinnedAt": "2026-09-17",
+      "repinNote": "CORRECTED 2026-09-17. The 2026-09-03 re-pin took Dependabot digests without checking what they were. The FROM lines carried a digest and no tag, so Dependabot tracked `:latest`: the pinned node digest was node:latest (Node 26.8.1, FULL Debian 13, 455 packages) and the python digest was python:latest (3.14.7, full Debian 13), while this record still said the tags below. Every check stayed green; security-scan then failed nightly from 2026-09-13 on 39 CRITICALs in ImageMagick/perl/LibRaw, packages a slim or alpine image never contains. The live containers were never rebuilt and ran the intended images throughout. FROM lines now name `tag@digest`, and image_policy_check fails any ref whose tag does not match this record. Verified: this digest is python:3.12-alpine as resolved 2026-09-17; Trivy with the CI flags reports zero CRITICALs."
+    },
+    {
+      "ref": "node",
+      "tag": "22-bookworm-slim",
+      "digest": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+      "where": "router/, scrubber/, claude-runner/, gemini-runner/ Dockerfiles, and the node22 stage of capability-factory/Dockerfile.builder",
+      "risk": "Router and scrubber are the privileged path — the router writes the audit ledger, the scrubber is the only holder of the PII vault. npm dependency surface is the supply-chain exposure here; see the lockfile rules in the lens.",
+      "previousDigest": "sha256:f5d1cc40abc10c2843339a2134d07817cf33c405cb16bfd052b0ed790254c3a3",
+      "repinnedAt": "2026-09-17",
+      "repinNote": "CORRECTED 2026-09-17. The 2026-09-03 re-pin took Dependabot digests without checking what they were. The FROM lines carried a digest and no tag, so Dependabot tracked `:latest`: the pinned node digest was node:latest (Node 26.8.1, FULL Debian 13, 455 packages) and the python digest was python:latest (3.14.7, full Debian 13), while this record still said the tags below. Every check stayed green; security-scan then failed nightly from 2026-09-13 on 39 CRITICALs in ImageMagick/perl/LibRaw, packages a slim or alpine image never contains. The live containers were never rebuilt and ran the intended images throughout. FROM lines now name `tag@digest`, and image_policy_check fails any ref whose tag does not match this record. Verified: this digest is node:22-bookworm-slim as resolved 2026-09-17 (Node 22.23.2, Debian 12); Trivy with the CI flags reports exactly one CRITICAL, CVE-2026-59873, restored to .trivyignore."
+    },
+    {
+      "ref": "golang",
+      "tag": "1.26-bookworm",
+      "digest": "sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514",
+      "where": "capability-factory/Dockerfile.builder",
+      "risk": "Deliberately NOT firewalled (the research phase sniffs arbitrary APIs) and profile-gated off by default. Highest-privilege lane when running — start it explicitly and supervise it.",
+      "previousDigest": "sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+      "repinnedAt": "2026-08-31"
+    },
+    {
+      "ref": "aquasec/trivy",
+      "tag": "latest",
+      "version": "0.74.0",
+      "digest": "sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969",
+      "where": ".github/workflows/security-scan.yml",
+      "risk": "CI-only, never in the runtime stack. Pinned deliberately rather than using the marketplace trivy-action: a third-party GitHub Action runs arbitrary code with repo context inside a security-critical pipeline. Safe to pin — Trivy fetches its vulnerability DB at run time, so a pinned binary still sees fresh CVEs; only the scanner engine is frozen.",
+      "previousDigest": "sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f",
+      "repinnedAt": "2026-08-31"
+    }
+  ],
+  "notPinned": [
+    {
+      "ref": "ai-control-plane-lanes / -router / -scrubber / -*-runner",
+      "why": "Built locally from this repo. Their reproducibility comes from the pinned FROM digests above plus the committed source, so a tag is sufficient."
+    }
+  ],
+  "_pendingBumps_note": "Version drift FOUND BY scripts/research_watch.py and deliberately deferred to the next review rather than bumped on the spot. Recorded so the deferral is a decision with a date, not a thing someone forgot. image_policy_check.py prints these on every run, so the queue cannot be missed while reading the policy it belongs to.",
+  "pendingBumps": [],
+  "lastReview": {
+    "date": "2026-08-31",
+    "verdict": "NOT routine. The queued 2.30.7 -> 2.32.5 bump was superseded mid-flight by a security signal, exactly as the pendingBumps note said it would be if one landed.",
+    "finding": "n8n published advisory batches on 2026-08-05 and 2026-08-19. Against the GitHub Security Advisory API: 41 advisories affect the pinned 2.30.7 (27 high / 13 medium / 1 low), including expression-sandbox escapes to host RCE, a JavaScript task-runner VM escape, MCP path-traversal RCE and several credential-exfiltration paths. The QUEUED target 2.32.5 would still have left 27 of them open (17 high) — bumping to the scheduled version would have looked like remediation and delivered a third of it.",
+    "action": "Re-pinned to 2.36.9. Confirmed 2026-08-31 that n8nio/n8n:latest AND :stable both resolve to this exact digest, so it is the vendor's own designated stable release, not a conservative guess — 2.37.x is the pre-release line.",
+    "scanEvidence": "Trivy (aquasec/trivy 0.74.0), --severity CRITICAL,HIGH --ignore-unfixed: deployed 2.30.7 = 56 findings; candidate 2.36.9 = 3 (all HIGH, none CRITICAL). CI gates on CRITICAL, so the candidate passes.",
+    "exposureNote": "n8n binds 127.0.0.1 and [::1] only and sits on the internal agentnet, so most of these advisories need an already-authenticated session or a shared workflow editor. That lowers likelihood; it does not make sandbox-escape-to-RCE acceptable on the component that executes agent-authored workflows.",
+    "allDigestsMoved": "All five base images had been rebuilt since 2026-07-24 and were re-resolved, not just n8n.",
+    "deployStatus": "PIN DECLARED, CONTAINER NOT YET RECREATED — an n8n major-line upgrade runs one-way DB migrations against the n8n-data volume. See the runbook note before recreating.",
+    "breakingChanges": "NONE APPLICABLE. n8n's packages/cli/BREAKING-CHANGES.md has exactly one 2.x entry, 2.0.0 (npm removed from the n8nio/RUNNERS image), which we are already past and which does not apply: we run n8nio/n8n and do not extend it. 2.30.7 -> 2.36.9 crosses zero documented breaking changes.",
+    "rollback": "n8n documents no downgrade path and uses TypeORM forward-only migrations, so the ONLY rollback is restoring the n8n-data volume (40MB). Back it up before recreating the container; n8n's own upgrade doc does not mention this.",
+    "followUp": {
+      "date": "2026-09-03",
+      "what": "Took the Dependabot base-image bumps for node and python (PRs #16-#20) after scanning both proposed digests.",
+      "why": "node f5d1cc4 ships tar 7.5.19, which REMOVES CVE-2026-59873 entirely — so accepting the bump deleted a .trivyignore exception rather than adding one. python 8edbf9e scans 0 fixed CRITICAL. n8n stays at 2.36.9: no published tag fixes CVE-2026-60002.",
+      "exceptionsNow": "1 (CVE-2026-60002, openssh, unreachable in this deployment), down from 2."
+    }
+  }
+}

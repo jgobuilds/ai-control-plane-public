@@ -1,0 +1,198 @@
+{
+  "id": "aicp-eval-drift",
+  "name": "Eval / drift lane (scheduled, AG-3)",
+  "meta": {
+    "description": "Weekly continuous-eval lane. A Schedule Trigger calls the `lanes` service (GET lanes:8081/eval-metrics?days=7, header x-lanes-token from $env.LANES_TOKEN), which runs scripts/eval_metrics.py over the audit ledger and returns analyze() as JSON. n8n cannot run python itself (hardened image — see docs/decisions/0006), so the lane runs in `lanes` while the SCHEDULE, EXECUTION LOG and Notify seam stay in n8n. A Code node formats agentic-leverage + quality metrics and any drift WARNs into { severity, title, message, source }; severity is 'warn' if any drift flag OR the ledger hash chain fails to verify OR the lane call fails. This measures metadata the router already logs; it is NOT a semantic eval — see docs/design/EVAL.md. Deploy with scripts/n8n_bootstrap.py — no UI clicks."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "e1e1e1e1-0000-0000-0000-000000000001",
+      "name": "Weekly (Mon 07:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://lanes:8081/eval-metrics?days=7",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lanes-token",
+              "value": "={{ $env.LANES_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e1e1e1e1-0000-0000-0000-000000000002",
+      "name": "Run eval metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The lanes service returns eval_metrics.analyze() as the response BODY.\n// A refused ledger (chain_ok:false) or a failed lane call escalates to warn —\n// the lane must never look healthy just because the call did not come back.\nconst d = $input.first().json || {};\nconst NL = String.fromCharCode(10);\nif (d.chain_ok === false || (!d.metrics && !d.note)) {\n  return [{ json: {\n    severity: 'warn',\n    title: 'Eval lane: LEDGER REFUSED or lane call failed',\n    message: ['chain_ok=' + d.chain_ok,\n              d.error || JSON.stringify(d).slice(0, 400),\n              'Run scripts/verify_audit.py.'].join(NL),\n    source: 'eval-drift'\n  } }];\n}\nif (!d.metrics) {\n  return [{ json: { severity: 'info', title: 'Eval lane: no data in window',\n    message: d.note || 'no decisions in the eval window yet.', source: 'eval-drift' } }];\n}\nconst m = d.metrics;\nconst flags = d.drift_flags || [];\nconst warn = flags.length > 0;\nconst warnLines = flags.map(function (f) { return '[' + f.metric + '] ' + f.message; }).join(NL);\n// HARNESS: which CONFIGURATION produced the result, not which model. Reported\n// only when at least two configs cleared the sample floor — below that the\n// breakdown is descriptive and ranking it would be inventing a signal.\nconst h = d.harness || {};\nconst cmp = (h.comparable || []);\nlet harnessLine;\nif (cmp.length >= 2) {\n  const best = (h.configs || []).filter(function (c) { return c.sufficient; })\n    .sort(function (a, b) { return (b.quality_held_pct || 0) - (a.quality_held_pct || 0); })[0];\n  harnessLine = 'Harness: ' + cmp.length + ' comparable configs; best held ' +\n    (best ? best.quality_held_pct + '% at $' + best.cost_per_held_usd + '/held (' + best.config + ')' : 'n/a');\n} else {\n  harnessLine = 'Harness: ' + (h.configs || []).length + ' config(s) seen, ' +\n    'too few runs each to compare (floor n=' + (h.min_n || '?') + ').';\n}\n\nconst lines = [\n  'Agentic leverage (proxy): ' + m.agentic_leverage_pct + '%  (' + m.leverage_numerator + '/' + m.attempted + ')',\n  'Verify-pass: ' + m.verify_pass_pct + '%   Change-failure: ' + m.change_failure_pct + '%',\n  'Block rate: ' + m.block_rate_pct + '%   PII-block: ' + m.pii_block_pct + '%   Approval: ' + m.approval_pct + '%',\n  harnessLine,\n  '',\n  warn ? ('DRIFT (' + flags.length + '):' + NL + warnLines) : 'No drift flags (key metrics within threshold).',\n  '',\n  'window ' + d.window.since + ' -> ' + d.window.until + '  n=' + d.records_in_window\n];\nreturn [{ json: {\n  severity: warn ? 'warn' : 'info',\n  title: 'Eval lane: leverage ' + m.agentic_leverage_pct + '%, verify-pass ' + m.verify_pass_pct + '%' + (warn ? (' - ' + flags.length + ' drift flag(s)') : ''),\n  message: lines.join(NL),\n  source: 'eval-drift'\n} }];"
+      },
+      "id": "e1e1e1e1-0000-0000-0000-000000000003",
+      "name": "Format eval summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "e1e1e1e1-0000-0000-0000-000000000004",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "id": "ondemand",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        460
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    }
+  ],
+  "connections": {
+    "Weekly (Mon 07:00)": {
+      "main": [
+        [
+          {
+            "node": "Run eval metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run eval metrics": {
+      "main": [
+        [
+          {
+            "node": "Format eval summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format eval summary": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Run eval metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "aicp-error-trigger"
+  },
+  "active": false
+}

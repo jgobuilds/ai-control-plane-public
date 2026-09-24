@@ -1,0 +1,34 @@
+# Real log from ai-control-plane run 30218852842 (the proof PR), trimmed.
+# The ranker must surface the two real failure lines and drop the rest:
+# this suite prints 'PASS  a PASSING security check is not diagnosed as a
+# failure', which the first version happily reported as failing output.
+
+2026-07-26T20:23:16.2923504Z An unknown failure claims no cause:
+2026-07-26T20:23:16.2928658Z   PASS  its heading is about the log, not about the failure
+2026-07-26T20:23:16.2936424Z Missing configuration is a skip, not a failure:
+2026-07-26T20:23:16.3327679Z   PASS  auth-token-not-fail-closed
+2026-07-26T20:23:16.3352030Z   PASS  a PASSING security check is not diagnosed as a failure
+2026-07-26T20:23:16.3352373Z   PASS  but the real FAILURE line still matches
+2026-07-26T20:23:16.3354647Z An UNREADABLE log is not an unrecognised failure:
+2026-07-26T20:23:16.3390555Z   PASS  the headline says the log was unavailable, not that the failure is unknown
+2026-07-26T20:23:16.3470673Z An unknown failure escalates rather than inventing a cause:
+2026-07-26T20:23:16.6370872Z   PASS  change_failure == 25.0%
+2026-07-26T20:23:16.6374436Z   PASS  block reason pii == 1 (folded from error:PII)
+2026-07-26T20:23:16.8204047Z   PASS  regex bad pattern -> fail, no crash
+2026-07-26T20:23:16.8204971Z   PASS  judge via injected fn (bare-bool fail)
+2026-07-26T20:23:16.8205381Z   PASS  judge with no judge_fn fails closed
+2026-07-26T20:23:16.8205776Z   PASS  unknown grader type -> fail
+2026-07-26T20:23:16.8210891Z   PASS  one-fail: non-zero exit (gate blocks)
+2026-07-26T20:23:16.8211136Z   PASS  one-fail: exactly 1 failed
+2026-07-26T20:23:16.8211355Z   PASS  one-fail: regression true
+2026-07-26T20:23:16.8211819Z   PASS  missing-output: r1 marked failed
+2026-07-26T20:23:17.0877536Z Entrypoints — fail CLOSED when the firewall can't apply:
+2026-07-26T20:23:17.0878660Z   PASS  claude-runner/entrypoint.sh: aborts on firewall failure (Refusing to start)
+2026-07-26T20:23:17.0879277Z   PASS  claude-runner/entrypoint.sh: exits 1 on firewall failure
+2026-07-26T20:23:17.0881194Z   PASS  gemini-runner/entrypoint.sh: aborts on firewall failure (Refusing to start)
+2026-07-26T20:23:17.0881901Z   PASS  gemini-runner/entrypoint.sh: exits 1 on firewall failure
+2026-07-26T20:23:17.0883041Z Servers — auth fail CLOSED (refuse to boot without a token):
+2026-07-26T20:23:32.1320928Z   PASS  it names the slack error
+2026-07-26T20:23:32.1323765Z Slack app-level errors are not successes:
+2026-07-26T20:23:32.1933936Z PROOF-OF-PLUMBING: deliberate failure, matches no known cause signature
+2026-07-26T20:23:32.1964037Z ##[error]Process completed with exit code 1.

@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "NEUTRAL EXAMPLE — the engine ships with no operator patterns on purpose.",
+    "Copy to guardrail-patterns.json (gitignored) and edit, or have your private",
+    "<org>-instance overlay place that file here. The router mounts ./context",
+    "read-only, so this directory is how config reaches it — the same slot",
+    "brand.md and hygiene.json already use.",
+
+    "WHY THIS EXISTS. router/guardrails.js ships a default pattern set in a",
+    "public repo, so anyone can read it. For the OUTPUT patterns that is fine:",
+    "they match vendor credential FORMATS the vendors publish themselves, and",
+    "every open scanner uses the same ones. The INPUT (prompt-injection) patterns",
+    "are different — those phrasings are the defender's own work, and an attacker",
+    "who reads the regex can phrase around it immediately. Patterns you add here",
+    "never appear in the public repo, so a reader of the engine learns the",
+    "defaults, not yours.",
+
+    "This is defence in depth, NOT the boundary. The real isolation guarantee is",
+    "structural: per-scope mounts, per-scope tool allowlists, firewalled runners,",
+    "human gates. Anyone who can probe a running deployment can map a detection",
+    "layer empirically in a few dozen requests, so treat these as tripwires that",
+    "raise cost and produce audit signal — never as the wall.",
+
+    "SCHEMA. mode: 'extend' (default, adds to the built-ins) or 'replace'",
+    "(swaps the built-in set for yours, per section). Entries:",
+    "{ type, level: low|medium|high, re: <JS regex source>, flags: 'imsu' }.",
+    "Flags g and y are refused: scan() reads match[0] and those break it.",
+    "An invalid regex is dropped with a warning, never silently — and a",
+    "malformed file keeps the built-ins rather than disabling the control.",
+
+    "CAUTION. These regexes run on every prompt and every runner result. A",
+    "catastrophically backtracking pattern will stall the router; test anything",
+    "with nested quantifiers against a long adversarial input before shipping it."
+  ],
+
+  "mode": "extend",
+
+  "input": [],
+
+  "output": []
+}

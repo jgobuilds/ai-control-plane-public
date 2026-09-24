@@ -1,0 +1,43 @@
+name: pin-staleness
+
+# The CEILING on pinned tool versions. The 7-day cooldown in dependabot.yml stops
+# a pin moving too early; this fails when an upgrade that has cleared that cooldown
+# has gone untaken for more than 30 days. See scripts/pin_staleness.py for what is
+# measured and why, and docs/runbooks/UPGRADES.md for how to move a pin.
+#
+# Scheduled, not a push gate: it reads the public npm registry, so its answer
+# changes with time and with the registry's availability — the right shape for a
+# weekly signal and the wrong one for the deterministic quality gate. It ALSO runs
+# on changes to the pins themselves, so a pin to an unpublished version fails the
+# push that introduced it rather than the following Monday.
+#
+# A registry outage exits 2 and turns the run red. "Could not check" is not a pass.
+
+on:
+  schedule:
+    - cron: "41 7 * * 1"        # Mondays, after the daily security-scan
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "**/tools/package.json"
+      - "capability-factory/Dockerfile.builder"
+      - "scripts/pin_staleness.py"
+      - ".github/workflows/pin-staleness.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ceiling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Decision logic (offline)
+        run: python tests/pin_staleness_test.py
+      - name: Pins against the registry
+        run: python scripts/pin_staleness.py

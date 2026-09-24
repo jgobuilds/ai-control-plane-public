@@ -1,0 +1,358 @@
+# Findings ledger — the single source of truth for a finding's STATUS.
+#
+# WHY THIS EXISTS. The cross-check gate proves the documents AGREE about a
+# finding. It cannot prove they are RIGHT: a finding marked fixed everywhere and
+# actually broken passes it. This file closes that gap by making "closed" name
+# the command that proves it, so CI can run the claim rather than read it.
+#
+#   status: open      not fixed. No proof required — nothing is being claimed.
+#           closed    fixed. MUST carry `asserted_by`, and it must pass.
+#           partial   one half fixed. MUST carry `asserted_by` for the closed
+#                     half, and MUST say in `residual` what is still open.
+#           accepted  knowingly carried. MUST carry `why`. No test, because
+#                     there is nothing to prove — that is the honest label for a
+#                     risk you are living with, and it is NOT a synonym for
+#                     closed.
+#
+# `asserted_by` is a COMMAND plus an EXPECTED SUBSTRING of its output. The
+# command must exit zero AND print the substring. The substring is what makes it
+# specific: a suite that still passes after someone deletes the one check that
+# mattered would satisfy "exit 0" and fail this.
+#
+# Checked by tests/findings_assert_test.py, which runs every command.
+# Paths are relative to the repo root.
+#
+# PROOFS MUST RUN WHEREVER THE GATE RUNS. The first draft proved M5 with a
+# `node --test` suite, which fails on the host because node lives only in the
+# containers — an environmental failure that looks identical to a broken
+# control. Prefer a Python proof; there was already one written for exactly this
+# finding. The gate reports "command not found" separately from "assertion
+# failed", but it fails either way: a claim that cannot be checked here is not a
+# verified claim.
+
+meta:
+  source_of_truth: "docs/security/THREAT-MODEL.md prose; THIS FILE for status"
+  checked_by: "tests/findings_assert_test.py"
+  cross_checked_by: "tests/findings_crosscheck_test.py"
+
+findings:
+
+  # ---------- Critical ----------
+  - id: C1
+    title: "Pool-mode scope isolation is advisory, not structural"
+    severity: critical
+    status: closed
+    closed: 2026-08-01
+    asserted_by:
+      cmd: "python scripts/conformance_test.py"
+      expect: "rw mount does not contain a foreign root"
+    note: >-
+      Closed on BOTH vendors. The claude side landed 2026-07-31 (one runner per
+      isolation root, each mounting only its own subtree). The gemini side landed
+      2026-08-01: gen_compose emits gemini-runner-commons with the same mounts,
+      SCOPE_ROOT and PII_POLICY as the claude commons runner, and the pool-mode
+      runners that still mount the whole workspace moved behind a compose profile
+      so scoped mode does not start them. Proven live on both sides by writing a
+      canary into an isolated scope and failing to read it from the pooled
+      container — absent, not refused.
+
+  - id: C2
+    title: "The router is not the single entry point"
+    severity: critical
+    status: closed
+    closed: 2026-07-28
+    asserted_by:
+      cmd: "python scripts/boundary_check.py"
+      expect: "PASS router chokepoint"
+    note: >-
+      This assertion did not exist when C2 was closed. The finding was marked
+      fixed on the strength of a manual count, and one re-added HTTP node would
+      have reopened it silently — which is how it arose in the first place.
+      Writing this ledger is what surfaced that.
+
+
+      AND THE FIRST ASSERTION WAS ITSELF TOO NARROW, found 2026-08-08. It globbed
+      `n8n-workflows/*.json` and reported green while a SHIPPED EXAMPLE at the repo
+      root — n8n-workflow.example.json — POSTed straight to the claude runner's
+      /run endpoint carrying the runner's own token. (Phrased without the literal
+      URL on purpose: the first draft of this note tripped the very check it
+      describes, which is the fifth time in this repo that writing down a failure
+      has reproduced it.) The logic was right; the input set was one directory too
+      small. Same shape as the
+      staged-only hygiene scan and the one-directional mount check: the fourth
+      control here to pass by looking at the wrong SET rather than by being wrong.
+
+
+      The proof is now scripts/boundary_check.py, which walks the whole tree,
+      discovers runner hostnames from the runner map and the generated compose
+      rather than a frozen list, and refuses to pass when it discovers none. It
+      checks two ways in: a URL naming a runner host, and an outbound call
+      carrying x-runner-token (boundary-check: describes) — while deliberately
+      NOT flagging that same token in
+      a verify position, which is how a runner authenticates its own callers.
+      (That exemption once also covered n8n verifying the ask-human door with the
+      runner token; C3 records why that was wrong and the HOLDING rule that
+      replaced it.) The offending example was deleted: orphaned, and
+      n8n-workflows/router-dispatch.example.json already shows the same thing done
+      through the router. tests/security_test.py keeps its node-aware check as a
+      companion, because it can name the offending node and a text scan cannot.
+
+  - id: C3
+    title: "n8n is the crown jewels and the most exposed surface"
+    severity: critical
+    status: partial
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "all published ports bound to loopback"
+    residual: >-
+      n8n user management / SSO is still the operator's job. A localhost bind
+      stops the LAN, not a local user. And because env access in n8n nodes is on,
+      whoever can author a workflow holds every token in n8n's env: LANES_TOKEN,
+      ROUTER_TOKEN and ASK_HUMAN_TOKEN.
+    note: >-
+      2026-09-17: n8n no longer holds RUNNER_TOKEN. It had carried it to verify
+      the ask-human webhook, which let a UI-authored workflow call a runner
+      directly and skip the router. The door now uses ASK_HUMAN_TOKEN. Guarded by
+      tests/security_test.py ("n8n: no RUNNER_TOKEN in its environment") and by
+      boundary_check.py's HOLDING rule over workflow files.
+
+  # ---------- High ----------
+  - id: H1
+    title: "One shared secret, fail-open, timing-unsafe"
+    severity: high
+    status: closed
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "uses required ${VAR:?} form"
+
+  - id: H2
+    title: "/rehydrate is a PII de-tokenization oracle over HTTP"
+    severity: high
+    status: open
+
+  - id: H3
+    title: "Prompt injection -> cross-scope exfiltration"
+    severity: high
+    status: partial
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "does NOT mount /vault"
+    residual: >-
+      Heuristics catch the obvious, not the clever. The real fix is C1: an agent
+      that cannot read another scope cannot leak it.
+
+  - id: H4
+    title: "Firewall fails open; DNS is an open exfil channel"
+    severity: high
+    status: closed
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "aborts on firewall failure"
+
+  - id: H5
+    title: "The risk model trusts a caller-declared verb, and the tool allowlist restricted nothing"
+    severity: high
+    status: partial
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "claude-runner: never passes --allowedTools (a no-op under skip-permissions)"
+    residual: >-
+      actionBinding is "block" in the live policy as of 2026-09-18. Omitted or
+      unknown verbs and undefined triggers are refused, and declared verbs bind
+      the runner's tools. Still open: risk.enforce.secondVendorReadOnly is false,
+      so bound work is locked to claude, but triage and the verifier send gemini
+      no tool list, so those internal calls still run --yolo there until
+      READONLY_ARGS is probed against an authenticated gemini-runner and the key
+      is true. (The dispatch lane's under-declaration, advise for implement
+      work, trigger "dispatch" and no prompt, was fixed 2026-09-18.)
+    note: >-
+      The runner half closed 2026-09-17: claude-runner enforces the list with
+      --tools and --disallowedTools mcp__<server> instead of --allowedTools,
+      which a live probe (claude 2.1.220) showed restricts nothing under
+      --dangerously-skip-permissions. Bash ran with `--allowedTools Read`.
+      gemini-runner refuses a list it cannot enforce instead of ignoring it under
+      --yolo. The expect string is the static half. The behaviour is in
+      tests/unit/runner.test.mjs (14 tests, all red against the previous
+      runners), which runs in CI but not on a host without node, and that is why
+      it is not the proof. The router half (router/actions.js, bindAction +
+      dispatchTools) is proven by tests/unit/actions.test.mjs and
+      tests/unit/router.test.mjs in CI, and by scripts/conformance_test.py for
+      operation declarations.
+
+  # ---------- Medium ----------
+  - id: M1
+    title: "Vault plaintext at rest"
+    severity: medium
+    status: open
+
+  - id: M2
+    title: "PII detection is regex-only, US-only, no Luhn, no NER"
+    severity: medium
+    status: partial
+    asserted_by:
+      cmd: "python tests/pii_vendor_test.py"
+      expect: "byte-identical to the canonical copy"
+    residual: >-
+      The heuristic is still the floor when no ML backend is configured, and it
+      says so in its own output: names and most addresses are not detectable.
+
+  - id: M3
+    title: "fanout repo param unvalidated; /run trusted caller cwd"
+    severity: medium
+    status: closed
+    closed: 2026-07-28
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "declares SCOPE_ROOT"
+
+  - id: M4
+    title: "Cross-provider vendor exposure"
+    severity: medium
+    status: closed
+    closed: 2026-07-28
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "PII_POLICY is a known value"
+    note: >-
+      The dispatch-path half is enforced behind RUNNER_MAP. The prior
+      "MITIGATED" covered only the verifier.
+
+  - id: M5
+    title: "Approval links are unauthenticated capability URLs"
+    severity: medium
+    status: partial
+    asserted_by:
+      cmd: "python tests/rbac_policy_test.py"
+      expect: "All approver-RBAC policy checks passed"
+    residual: >-
+      The LINK itself is still an unauthenticated capability URL. What is proven
+      is the router-side half: RBAC plus separation of duties on the approval,
+      so possessing the link is not sufficient to approve as someone else. The
+      link remains guessable-if-leaked, and that is the open half.
+
+  - id: M6
+    title: "No egress review on deliverables"
+    severity: medium
+    status: open
+
+  - id: M7
+    title: "No CPU/mem/pids limits"
+    severity: medium
+    status: closed
+    closed: 2026-07-28
+    asserted_by:
+      cmd: "python tests/security_test.py"
+      expect: "memswap_limit == mem_limit"
+
+  - id: M8
+    title: "Secrets in env (visible to docker inspect, /proc)"
+    severity: medium
+    status: accepted
+    why: >-
+      Docker secrets need swarm or a file-mount rework, and the tokens are
+      already distinct per service and required at boot. Revisit when a second
+      operator exists or the stack leaves one host.
+
+  # ---------- Low ----------
+  - id: L1
+    title: "No durable audit log in the router"
+    severity: low
+    status: closed
+    asserted_by:
+      cmd: "node --test tests/unit/router.test.mjs"
+      expect: "builds a sha256(prevHash+json) chain"
+      requires: node
+    note: >-
+      The first proof was `verify_audit.py`, which checks a LIVE ledger. CI has
+      none — the audit volume is gitignored runtime state — and that script
+      EXITS ZERO when no ledger exists, so the claim passed vacuously there
+      while failing the substring. L1 is about the router HAVING durable
+      hash-chained logging, which is a property of the code, so the proof is now
+      the code-level test.
+
+  - id: D1
+    title: "A runner error was reported as a successful, empty decision"
+    severity: medium
+    status: closed
+    closed: 2026-08-01
+    asserted_by:
+      cmd: "python tests/eval_analysis_test.py"
+      expect: "not_regex FAILS on empty output"
+    note: >-
+      callRunner resolved on ANY HTTP status, so a runner 500 became a 200 whose
+      result was an empty string, and the audit ledger recorded it as a
+      successful decision. Found by the first live run of a curated eval set:
+      both vendor CLIs were failing (neither logged in), every /route returned
+      200, and the only symptom was empty output. Two fixes, because the failure
+      needed both halves to stay hidden - the router now rejects on status >= 400
+      (preserving 4xx policy refusals, mapping 5xx to 502), and negative eval
+      graders FAIL on empty output instead of passing vacuously. The asserted_by
+      command covers the grader half; the router half was proven on the running
+      stack, before and after: 200-with-empty-result became 502 naming the host
+      and the underlying CLI error.
+    residual: >-
+      CLAUDE FIXED 2026-08-01, and the cause was a regression from the isolation
+      cutover rather than a missing login: CLAUDE_CODE_OAUTH_TOKEN was already in
+      .env, but gen_compose never passed it to the generated runners, so cutting
+      over from the hand-written claude-runner to the scoped ones silently
+      unauthenticated every claude tier. A generated service must reach ENV
+      PARITY with the one it replaces. Verified end to end - real API call, real
+      token usage, is_error false. GEMINI still OPEN: it needs GEMINI_API_KEY,
+      which is absent from .env and is the operator's to supply.
+
+  - id: D3
+    title: "A prompt reached the append-only audit ledger"
+    severity: high
+    status: closed
+    closed: 2026-08-06
+    asserted_by:
+      cmd: "node --test tests/unit/router.test.mjs"
+      expect: "strips the prompt from the exact string that leaked"
+      requires: node
+    note: >-
+      The ledger stores promptSha256 and NEVER the prompt - that rule is what
+      makes it safe to keep and what the no-external-processor position rests on.
+      Fixing D1 (propagate runner errors instead of reporting an empty success)
+      carried the runner's stderr into the Error message, and a failing CLI
+      reports "Command failed: claude -p <the whole prompt> --flags". route()
+      writes that message into `blocked`. runnerErrorSummary now keeps the first
+      line, cuts everything from the -p flag, and caps at 200 chars; verified
+      against the exact string found in the live ledger, and against a non-prompt
+      error to confirm it still diagnoses.
+    residual: >-
+      TWO RECORDS ALREADY CONTAIN A PROMPT and they cannot be removed - the
+      ledger is append-only and hash-chained, which is the property being relied
+      on. Owner decision 2026-08-06: leave them and record the incident rather
+      than break the chain. Both were test prompts written during this session
+      ("Which department should handle a request about updating a shipping
+      address?") in the delivery and internal scopes; no client content. If a
+      real prompt ever lands this way, rotating the ledger with a documented
+      chain break is the remedy, and that decision should be made deliberately
+      rather than reflexively.
+
+  - id: D2
+    title: "A dead verifier destroyed completed work"
+    severity: medium
+    status: closed
+    closed: 2026-08-01
+    asserted_by:
+      cmd: "node --test tests/unit/router.test.mjs"
+      expect: "both down + verify REQUIRED => fail closed"
+      requires: node
+    note: >-
+      verifyOnTiers sends every t3 decision to a cross-vendor reviewer; when that
+      vendor was unreachable the exception propagated out of route() and the
+      primary work was discarded. Now: a risk-mandated verify still fails closed,
+      a tier-triggered one degrades and returns the work, and an unreachable
+      cross-vendor reviewer retries same-vendor first. verifyStatus reaches the
+      ledger so an outage cannot silently improve the verify-pass rate.
+
+  - id: L2
+    title: "500 responses echo internal paths"
+    severity: low
+    status: open
+
+  - id: L3
+    title: "silo runnerHosts in scopes.json do not exist in compose"
+    severity: low
+    status: open

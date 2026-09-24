@@ -1,0 +1,13 @@
+{
+  "_comment": "SOLO template — a single practitioner. One personal scope, pooled runner, no confidentiality boundaries. Rename 'me' and add scopes as you grow. Applied by scripts/install.py --scope-template solo.",
+  "levels": ["personal"],
+  "workspaceRoot": "scopes",
+  "defaultScope": "me",
+  "levelDefaults": {
+    "personal": { "pii": "warn", "isolation": "pool", "promotion": "review", "retentionDays": 90 }
+  },
+  "nodes": {
+    "me": { "level": "personal", "parent": null }
+  },
+  "conflicts": { "pairs": [] }
+}

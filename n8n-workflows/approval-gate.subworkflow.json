@@ -1,0 +1,277 @@
+{
+  "id": "aicp-approval-gate",
+  "name": "Approval gate (reusable)",
+  "meta": {
+    "description": "Call via Execute Workflow with { title, message, source, autoApprove? }. Sends an approval request through the channel-abstracted Notify sub-workflow with Approve/Reject links, then WAITS until a link is clicked. Returns { approved, auto, timedOut }. Timeout (24h) = rejected — default deny. autoApprove:true short-circuits to approved (lets callers keep one linear flow and decide per-scope whether a human is required).",
+    "m5_identity_capture": "THREAT-MODEL M5 / RBAC: the resume URL below is an UNAUTHENTICATED capability link — anyone who holds it can approve, and the click carries NO approver identity. Router-side RBAC (router/rbac.js) enforces approver-group authorization + segregation of duties, but only if a TRUSTWORTHY approver identity reaches it. To bind approval to a NAMED approver: front the resume webhook with authenticated ingress (Google SSO / IAP), read the verified identity from the IAP headers (X-Goog-Authenticated-User-Email / X-Goog-Authenticated-User-Id), resolve that user's Google Group membership, and pass identity + groups to the router as `approver` + `approverGroups` (alongside the original `requester`) on the re-call with approved:true. Alternative: issue signed, short-lived resume links bound to a specific named approver instead of one shared URL. Until that ingress is in place the resume link remains a bearer capability — see RBAC.md."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "action",
+              "type": "string"
+            },
+            {
+              "name": "scope",
+              "type": "string"
+            },
+            {
+              "name": "riskTier",
+              "type": "string"
+            },
+            {
+              "name": "requester",
+              "type": "string"
+            },
+            {
+              "name": "dataTouched",
+              "type": "string"
+            },
+            {
+              "name": "preview",
+              "type": "string"
+            },
+            {
+              "name": "dimensions",
+              "type": "string"
+            },
+            {
+              "name": "autoApprove",
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "id": "abababab-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.autoApprove }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "abababab-0000-0000-0000-000000000002",
+      "name": "Auto-approve?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Auto lane: no human needed for this caller/scope.\nreturn [{ json: { approved: true, auto: true, timedOut: false } }];"
+      },
+      "id": "abababab-0000-0000-0000-000000000003",
+      "name": "Approve (auto)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the human-facing request from the TYPED contract (G3).\n//\n// The gate used to render `${i.title}` + a free-text message. A human cannot\n// judge \"APPROVAL NEEDED: action\" — so they approve it, which is exactly the\n// rubber-stamp Lanham's second HITL decision warns about. The router already\n// computed every field below; this only has to show them.\nconst i = $input.first().json;\nconst url = $execution.resumeUrl;\n\n// FAIL CLOSED on an incomplete request. Rendering a prompt with blanks asks a\n// human to authorise something nobody described, and the old `|| 'action'`\n// fallback made that the DEFAULT rather than an error. Throwing here means no\n// approval is sent, which is the safe direction: nothing gets approved.\nconst required = ['action', 'scope', 'riskTier', 'requester', 'dataTouched', 'preview'];\nconst missing = required.filter((k) => i[k] === undefined || i[k] === null || i[k] === '');\nif (missing.length) {\n  throw new Error(\n    `approval-gate: refusing to ask for approval without [${missing.join(', ')}]. ` +\n    `An approval prompt a human cannot judge is worse than no gate — they approve it. ` +\n    `The caller must map these; workflow_lint.py enforces it.`);\n}\n\nconst row = (k, v) => `  ${String(k).padEnd(13)}${v}`;\nconst fired = i.dimensions ? `  (fired: ${i.dimensions})` : '';\n\nconst message = [\n  `WHAT WILL HAPPEN IF YOU APPROVE`,\n  `  ${i.action}`,\n  ``,\n  row('Scope', i.scope),\n  row('Risk', `${i.riskTier}${fired}`),\n  row('Requested by', i.requester),\n  row('Data touched', i.dataTouched),\n  ``,\n  `PREVIEW`,\n  String(i.preview).split('\\n').map((l) => '  ' + l).join('\\n'),\n  ``,\n  `✅ Approve: ${url}?approved=true`,\n  `❌ Reject:  ${url}?approved=false`,\n  ``,\n  `No response within 24h = REJECTED. Rejecting costs a round trip;`,\n  `approving something you could not verify costs whatever it does next.`,\n].join('\\n');\n\nreturn [{ json: {\n  severity: 'warn',\n  title: `APPROVAL NEEDED: ${i.action}`,\n  message,\n  source: i.source || 'approval-gate',\n} }];\n"
+      },
+      "id": "abababab-0000-0000-0000-000000000004",
+      "name": "Build request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "abababab-0000-0000-0000-000000000005",
+      "name": "Notify approvers",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "GET",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 24,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "abababab-0000-0000-0000-000000000006",
+      "name": "Wait for decision",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "webhookId": "abababab-1111-2222-3333-444444444444",
+      "position": [
+        1100,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resumed either by a clicked link (query.approved present) or by timeout.\n// Anything other than an explicit approved=true is a rejection — default deny.\nconst q = $input.first().json.query || {};\nconst timedOut = q.approved === undefined;\nreturn [{ json: {\n  approved: q.approved === 'true',\n  auto: false,\n  timedOut\n} }];"
+      },
+      "id": "abababab-0000-0000-0000-000000000007",
+      "name": "Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "When called": {
+      "main": [
+        [
+          {
+            "node": "Auto-approve?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-approve?": {
+      "main": [
+        [
+          {
+            "node": "Approve (auto)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build request": {
+      "main": [
+        [
+          {
+            "node": "Notify approvers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify approvers": {
+      "main": [
+        [
+          {
+            "node": "Wait for decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for decision": {
+      "main": [
+        [
+          {
+            "node": "Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "active": false
+}

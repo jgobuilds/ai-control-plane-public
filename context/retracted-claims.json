@@ -1,0 +1,39 @@
+{
+  "_doc": "Claims this repo once made, found false, and corrected. scripts/claims_check.py fails CI if one reappears in a tracked doc outside `history` — the files that quote it on purpose, as a record of the error. Correcting the source of truth is not enough: on 2026-08-10 the billing matrix was fixed and three docs kept stating the old claim in their own words for seven weeks. Each `patterns` entry is a case-insensitive regex, matched against text with line breaks, blockquote markers and bold collapsed, so a claim wrapped across lines still matches; a space in a pattern matches any run of whitespace.",
+  "claims": [
+    {
+      "id": "anthropic-agent-sdk-credit-cancelled",
+      "retracted": "Anthropic's move of headless claude -p to a metered Agent SDK credit was cancelled before it took effect, so a subscription still covers unattended volume.",
+      "truth": "It took effect on 2026-06-15: claude -p draws on a capped monthly Agent SDK credit, not plan usage limits.",
+      "source_of_truth": "docs/design/PROVIDER-BILLING.md",
+      "verified": "2026-09-19",
+      "patterns": [
+        "cancell?ed[^.]{0,80}(2026-06-15|before (it )?(took|taking) effect)",
+        "(paused|retracted|reversed)[^.]{0,60}(credit|metered|agent sdk)",
+        "(subscription|plan) (usage )?limits (are )?(unchanged|still cover)",
+        "still draws? on (the )?(subscription|plan)",
+        "subscription does currently cover"
+      ],
+      "history": [
+        "docs/design/PROVIDER-BILLING.md",
+        "idea-dossier/06-backlog.md",
+        "AGENTS.md",
+        "idea-dossier/00-index.md"
+      ]
+    },
+    {
+      "id": "mem0-removed-its-graph",
+      "retracted": "Mem0 removed/deleted its own graph after its benchmarks showed the graph lost on single- and multi-hop recall.",
+      "truth": "Mem0 replaced its external graph-DB integration with a native, always-on built-in graph. Its paper found the graph ~2% better overall: best on temporal, better on open-domain, a marginal drop on single-hop, no gain on multi-hop.",
+      "source_of_truth": "docs/decisions/0008-context-and-knowledge-at-scale.md",
+      "verified": "2026-09-19",
+      "patterns": [
+        "mem0 [^.]{0,40}(removed|deleted|deleting|dropped|abandoned|killed) its (own )?graph",
+        "mem0 [^.]{0,60}graph[^.]{0,40}lost on (single|multi)"
+      ],
+      "history": [
+        "docs/decisions/0008-context-and-knowledge-at-scale.md"
+      ]
+    }
+  ]
+}

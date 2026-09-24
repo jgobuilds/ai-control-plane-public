@@ -1,0 +1,388 @@
+# Quality gate for ai-control-plane. The framework that enforces the standards had no
+# CI of its own — every check ran only when someone remembered. This gates them
+# on push/PR, so an autonomous change that breaks an invariant turns the build
+# red instead of landing silently.
+#
+# Failure visibility: GitHub emails the actor and marks the commit/PR red. For
+# push-notification into a channel (the autonomous case where no one is watching
+# the Actions tab), see the `notify` job below — wire NOTIFY_WEBHOOK_URL in repo
+# secrets to route failures to Slack/Teams/webhook via the same seam as the n8n
+# Notify sub-workflow.
+name: quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (stdlib + pyyaml; the checks are otherwise dependency-free)
+        run: python -m pip install --quiet pyyaml
+
+      # Governance invariants — the conformance suite asserts the policy files
+      # agree and the controls are wired. This is the load-bearing check.
+      - name: Conformance
+        run: python scripts/conformance_test.py
+
+      # Mount drift — a context file on disk that no runner mounts. gen_compose
+      # computes mounts from what exists AT GENERATE TIME, so a CLAUDE.md added
+      # afterwards is silently invisible to the agent: no mount, no warning, and
+      # output that is merely worse. Conformance checks mounts are not too BROAD;
+      # this checks they are not too narrow. (--live is workstation-only; CI has
+      # no running stack, and the deploy-drift half is proven by
+      # tests/mount_drift_test.py.)
+      - name: Mount drift
+        run: python scripts/mount_drift_check.py
+
+      # The standalone check-scripts (repo convention: *_test.py, run directly,
+      # exit nonzero on failure). Named *_test.py, which unittest discover misses
+      # by default — run them as scripts, exactly as TESTING.md documents.
+      - name: Test scripts
+        run: |
+          for t in tests/*_test.py; do
+            echo "== $t =="
+            python "$t" || exit 1
+          done
+
+      # Node unit tests. THESE WERE NEVER RUN IN CI — seven files including the
+      # runner's safeCwd boundary, the scope-root guard, the in-runner PII
+      # guard, RBAC and the killswitch. They passed locally when someone
+      # remembered, which is not a gate. A security test nobody runs is a
+      # comment that takes longer to write.
+      #
+      # Pure stdlib node:test, no install step: the services have no runtime
+      # dependencies, which is what makes this a two-line addition rather than
+      # a build.
+      - name: Node unit tests
+        run: |
+          for t in tests/unit/*.test.mjs; do
+            echo "== $t =="
+            node --test "$t" || exit 1
+          done
+        env:
+          ALLOW_NO_AUTH: "1"
+          ROUTER_TOKEN: test
+          ROUTER_SERVER: ${{ github.workspace }}/router/server.js
+          # The map resolves relative to server.js in both the image and a
+          # checkout, so CI needs no override — this is here as the explicit
+          # statement that CI runs against the repo's map, not a baked one.
+          RUNNER_MAP_PATH: ${{ github.workspace }}/context/runner-map.json
+
+      # Regression corpora (unittest, test_*.py) — the labeled false-positive
+      # cases for workspace_doctor's guards.
+      - name: Corpora
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      # The offline eval grader. IMPROVEMENT-LOOP.md called eval_run a CI gate
+      # while nothing ran it — this test is named *_test.py, so the discover step
+      # above never saw it (ADR 0020). Real datasets are gitignored per scope, so
+      # the gate over real data runs host-side; CI proves the grader grades.
+      - name: Eval grader
+        run: python tests/eval_run_test.py
+
+      # "Closed" must be a command that passes, not a word. Every closed and
+      # partial finding names a proof; this runs them. Demonstrated by deleting
+      # one assertion: the suite still exited 0 and this caught it.
+      - name: Every finding's proof actually runs
+        run: python tests/findings_assert_test.py
+
+      # Finding status lives in two Markdown files and is referenced from a
+      # third YAML file, and nothing checked any of them. Seven status claims
+      # drifted in one week, including two documents recording the same finding
+      # with different answers.
+      - name: Finding status agrees across documents
+        run: python tests/findings_crosscheck_test.py
+
+      # Dependabot's docker updater aborted daily for five days on a directory
+      # with no Dockerfile in it. Nothing noticed, because the FIXING half of
+      # dependency-security failing silently looks exactly like the scanning half
+      # finding nothing wrong. Checkable with no network and no credentials.
+      - name: Dependabot points at real manifests
+        run: python scripts/dependabot_check.py
+
+      # The recurrence register: seen once fix it, seen twice fix the harness.
+      # --shape is the only honest mode here — occurrence counts live in audit/,
+      # which is gitignored, so a counting gate in CI would pass while counting
+      # nothing. This runs every claimed harness fix's proof instead.
+      - name: Recurrence register is honest
+        run: python scripts/recurrence.py check --shape
+
+      - name: Recurrence gate fires when it should
+        run: python tests/recurrence_test.py
+
+      # The router is the only thing that may reach a runner (threat model C2).
+      # NOT an import rule — the violation is a string in an HTTP call, so no
+      # architecture-conformance tool can see it. A shipped example workflow was
+      # calling claude-runner directly when this was written.
+      - name: Router chokepoint holds
+        run: python scripts/boundary_check.py
+
+      - name: Chokepoint check fires when it should
+        run: python tests/boundary_test.py
+
+      # Sample data must announce itself. A public use-case register shipped two
+      # invented-but-realistic owner names with every gate green — pii_scan says
+      # in its own output that names are not reliably detectable, so this checks
+      # the property that IS gateable: does the value look like an example?
+      - name: Example names are obviously fake
+        run: python scripts/check_example_names.py .
+
+      # A move that leaves a dangling markdown link fails here, not in a reader's
+      # face. Deterministic (file exists or it doesn't); no external dependency.
+      - name: Doc links
+        run: python scripts/check_links.py
+
+      # The public-site pages are ready to publish: every page in site.manifest
+      # exists and fetches nothing from a third party on load. `pages` re-runs
+      # the manifest check before it deploys; the test lives here so a broken
+      # rule fails the commit that broke it, deploy or no deploy.
+      # The test runs first — the third-party rule once passed a Google Fonts page.
+      - name: Site pages publishable
+        run: |
+          python tests/build_site_test.py
+          python scripts/build_site.py --check
+
+      # Decisions must weigh cost, not just architecture: an ADR whose options
+      # table has no Cost column (or a blank cell) fails here.
+      - name: ADR contract
+        run: python scripts/adr_check.py
+
+      # A claim corrected at its source can live on, restated, everywhere else:
+      # the billing matrix was fixed 2026-08-10 and three docs kept the retracted
+      # version for seven weeks. Fails if a registered retracted claim reappears
+      # outside the files that quote it as history. Test first, so a check that
+      # has stopped matching cannot report a clean tree.
+      - name: Retracted claims stay retracted
+        run: |
+          python tests/claims_check_test.py
+          python scripts/claims_check.py
+
+      # This engine ships brand-neutral — that property is what lets it be public
+      # under Apache-2.0, so it gets a CI gate and not just a commit hook
+      # (configured is not installed, and --no-verify exists). --tree is
+      # load-bearing: the default staged mode scans nothing in CI, where nothing
+      # is ever staged, and would report green over an empty list.
+      - name: Public hygiene (brand-neutral engine)
+        run: python scripts/check_public_hygiene.py --tree
+
+      # Images are digest-pinned AND the pins are reviewed on a schedule. A
+      # floating :latest tag fails here; so does a pin nobody has looked at since
+      # its review date — a frozen pin is a frozen vulnerability.
+      - name: Image pins
+        run: python scripts/image_policy_check.py
+
+      # Model policy is DATED — this fails once the review date passes or a
+      # routed model deprecates, which is how the tier map stays current.
+      - name: Model policy freshness
+        run: python scripts/model_policy_check.py
+
+      # n8n validates almost nothing at import: a malformed sub-workflow call
+      # imports "ok", shows green, and fails only when the lane runs. Every
+      # workflow in this repo carried such a defect until the first real
+      # end-to-end execution. These are the run-time-only mistakes, caught
+      # statically.
+      - name: Workflow lint
+        run: python scripts/workflow_lint.py
+
+      # The cloud registry: every provider declares a status, its egress and the
+      # processor relationship it needs. A provider that omits any of those
+      # cannot be evaluated against ADR 0010's no-external-processor rule at all.
+      - name: Cloud provider registry
+        run: python tests/cloud_test.py
+
+      # The solutions log: shape only — frontmatter, unique ids, a real date,
+      # and an index that has not drifted. Deliberately NOT the prose: a gate
+      # that argues about writing quality gets switched off, and then nothing
+      # is checked at all.
+      - name: Solutions log
+        run: |
+          python scripts/solution.py --dir docs/solutions check
+          python scripts/solution.py --dir docs/solutions index --check
+
+      # The framework audits its own context layout against its own standard.
+      - name: Workspace doctor (self-audit)
+        run: python scripts/workspace_doctor.py . --fail-on high
+
+
+      # The vendored CI diagnostician. Its corpus ships with it: a vendored file
+      # nobody runs is a vendored file that has silently rotted.
+      - name: CI diagnostician corpus
+        run: |
+          python tests/ci_diagnose_test.py
+          python tests/ci_comment_test.py
+  # Push CI failures to a channel (autonomous insight). Channel-configurable via
+  # the NOTIFY_KIND variable — Slack (Block Kit) default, Teams (MessageCard), or
+  # generic webhook. No-ops when the URL secret is unset. Setup + payload detail:
+  # ai-standards/references/ci-notifications.md. Kept identical across the fleet
+  # on purpose (each repo stands alone); that file is its single source of truth.
+  notify:
+    needs: checks
+    if: failure()
+    runs-on: ubuntu-latest
+    # Least privilege, and both are needed: a PR failure comments on the PR
+    # (issues: write covers PR conversation comments), a push failure comments
+    # on the commit (contents: write). Nothing else is granted — the poster has
+    # no rerun or git-write path, and the token should not offer it one.
+    permissions:
+      # actions: read is what lets `gh run view --log-failed` read the log. It
+      # is listed FIRST because omitting it is silent: a permissions: block
+      # REPLACES the default set rather than adding to it, so adding the three
+      # write scopes below removed the read scope the job already had. The fetch
+      # then 403s, the diagnostician sees an error string instead of a log, and
+      # every failure is reported as "unrecognised". Proven on PR #3.
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      # The notify job runs on a fresh runner, so the diagnostician's own source
+      # and its known-cause table have to be checked out before it can run.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Diagnose BEFORE notifying, so the alert carries a cause rather than just
+      # a red X. Deterministic only here: the model tier lives behind the router,
+      # which is loopback-only and unreachable from a GitHub runner. A known
+      # cause costs nothing and cannot hallucinate; an unknown one says so.
+      #
+      # This step CANNOT fix anything — see the tool's header for why an agent
+      # rewarded for green CI learns to file down the gates.
+      - name: Diagnose the failure (advise only)
+        id: diagnose
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          # Per-JOB logs, not `gh run view --log-failed`. This job is part of the
+          # run it is reporting on, so the run is still in progress and its
+          # archived log does not exist yet — `--log-failed` returned something
+          # non-empty but useless, which the diagnostician faithfully reported
+          # as an unrecognised failure. An individual job's log IS available as
+          # soon as that job finishes, which is exactly the case here.
+          : > /tmp/ci.log
+          IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100"                   --jq '.jobs[] | select(.conclusion=="failure") | .id' 2>/dev/null || true)
+          for id in $IDS; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" >> /tmp/ci.log 2>/dev/null || true
+          done
+          if [ ! -s /tmp/ci.log ]; then
+            # Say WHY, in the file itself, so the diagnostician reports "log
+            # unavailable" rather than "unrecognised failure" — the distinction
+            # this whole step exists to preserve.
+            echo "failed to get run: could not read any failed job log" > /tmp/ci.log
+            echo "::warning::could not read the failure log — check that this job grants actions: read"
+          fi
+          # Has this workflow EVER concluded successfully? It is the single most
+          # load-bearing fact about a red build and the run list does not show
+          # it: a first-run failure and a regression look identical there and
+          # need opposite responses. One workflow in this fleet failed 7 for 7
+          # while everyone looked for what the last commit had broken.
+          # Looked up here rather than in the tool, which has no network by
+          # design. Defaults to "unknown", never to a guess.
+          EVER=unknown
+          # Strip at the @ BEFORE taking the basename. GITHUB_WORKFLOW_REF is
+          # owner/repo/.github/workflows/x.yml@refs/heads/main — basename first
+          # returns "main", which resolves to no workflow at all and silently
+          # yields "unknown" forever. Verified against the real API, not assumed.
+          WF_FILE="${GITHUB_WORKFLOW_REF%%@*}"; WF_FILE="${WF_FILE##*/}"
+          if SUCCESSES=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WF_FILE/runs?status=success&per_page=1" --jq '.total_count' 2>/dev/null); then
+            [ "$SUCCESSES" -gt 0 ] 2>/dev/null && EVER=yes || EVER=no
+          fi
+          echo "workflow has ever passed: $EVER"
+          python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" > /tmp/diag.txt 2>&1 || true
+          python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" --json > /tmp/diag.json 2>/dev/null || echo '{}' > /tmp/diag.json
+          cat /tmp/diag.txt
+          # The ALERT gets one line. An alert is an interrupt, and the
+          # notification standard caps it accordingly — the full diagnosis goes
+          # in the comment, which is a click away and does not compete for
+          # attention with every other message in the channel.
+          BLUF=$(python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" --bluf 2>/dev/null | head -1)
+          echo "BLUF=${BLUF:-CI failed; no diagnosis produced.}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Put the cause where the failure is already being discussed: a comment on
+      # the PR (or the commit) and the run-page job summary. Zero configuration
+      # — the built-in token is enough. Separate tool from the diagnostician on
+      # purpose; see the header of scripts/ci_comment.py.
+      - name: Comment the diagnosis on GitHub
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/ci_comment.py --diagnosis /tmp/diag.json --target github
+
+      # An UNRECOGNISED failure is state that outlives the run: nobody has a
+      # fix for it yet. A known cause is not — it has a fix, so it needs the fix,
+      # not a ticket. Keyed on the CONDITION (repo+workflow), never the run, so
+      # a re-run edits one ticket instead of filing a fifth.
+      - name: File a ticket for an unrecognised failure
+        if: contains(steps.diagnose.outputs.BLUF, 'Unrecognised')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TICKET_BACKEND: ${{ vars.TICKET_BACKEND || 'github' }}
+        run: |
+          python scripts/ticket.py open             --key "ci/$GITHUB_WORKFLOW/unrecognised-failure"             --title "CI: unrecognised failure in $GITHUB_WORKFLOW"             --body-file /tmp/diag.txt
+
+      - name: Notify on failure
+        env:
+          KIND: ${{ vars.NOTIFY_KIND || 'slack' }}
+          SLACK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEAMS_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          MENTION: ${{ vars.NOTIFY_SLACK_MENTION }}
+          BLUF: ${{ steps.diagnose.outputs.BLUF }}
+        run: |
+          case "$KIND" in
+            slack) URL="$SLACK_URL" ;;
+            teams) URL="$TEAMS_URL" ;;
+            *)     URL="$WEBHOOK_URL" ;;
+          esac
+          if [ -z "$URL" ]; then
+            echo "No webhook URL for NOTIFY_KIND=$KIND — skipping."
+            exit 0
+          fi
+          SHA="${GITHUB_SHA:0:8}"
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          FALLBACK="CI failed: $GITHUB_REPOSITORY @ $SHA on $GITHUB_REF_NAME - $RUN"
+          DIAG="${BLUF:-(no diagnosis produced)}"
+          # Optional Slack mention so a failure actively notifies, not just
+          # posts. Slack-only syntax; ignored for teams/webhook. Set the
+          # NOTIFY_SLACK_MENTION repo variable to: channel | here | <@U…> | <!subteam^…>.
+          case "$MENTION" in
+            channel) MENTION="<!channel>" ;;
+            here)    MENTION="<!here>" ;;
+            *)       : ;;  # empty stays empty; raw tokens pass through
+          esac
+          # jq (preinstalled on runners) builds every payload — no shell text is
+          # interpolated into JSON, so a hostile branch name cannot break it.
+          case "$KIND" in
+            slack)
+              BODY=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$SHA" --arg branch "$GITHUB_REF_NAME" --arg run "$RUN" --arg fb "$FALLBACK" --arg mention "$MENTION" --arg diag "$DIAG" '($mention | if . == "" then "" else . + " " end) as $m | { text: ($m + $fb), blocks: [ { type:"section", text:{ type:"mrkdwn", text:($m + ":x: *CI failed* — `" + $repo + "`") } }, { type:"section", fields:[ { type:"mrkdwn", text:("*Branch:* " + $branch) }, { type:"mrkdwn", text:("*Commit:* `" + $sha + "`") } ] }, { type:"section", text:{ type:"mrkdwn", text:(":mag: " + $diag) } }, { type:"actions", elements:[ { type:"button", text:{ type:"plain_text", text:"View run" }, url:$run, style:"danger" } ] } ] }') ;;
+            teams)
+              BODY=$(jq -nc --arg t "$FALLBACK" '{"@type":"MessageCard","@context":"http://schema.org/extensions","summary":"CI failure","themeColor":"D64545","text":$t}') ;;
+            *)
+              BODY=$(jq -nc --arg t "$FALLBACK" '{text:$t}') ;;
+          esac
+          curl -fsS -X POST -H 'content-type: application/json' -d "$BODY" "$URL" || echo "notify POST failed (non-fatal) — CI status already shows the failure"
+
+      # The detail, threaded under the alert. Runs AFTER the alert because it
+      # replies to it. Needs a BOT TOKEN: an incoming webhook returns no message
+      # ts, so a webhook alert cannot be threaded at all — with webhook-only
+      # setup this step reports that and skips, and the BLUF line in the alert
+      # plus the GitHub comment still carry the diagnosis.
+      - name: Reply with the diagnosis in the Slack thread
+        continue-on-error: true
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+        run: python scripts/ci_comment.py --diagnosis /tmp/diag.json --target slack

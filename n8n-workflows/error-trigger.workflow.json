@@ -1,0 +1,125 @@
+{
+  "id": "aicp-error-trigger",
+  "name": "Global Error Handler",
+  "meta": {
+    "description": "Set this as the Error Workflow on your other workflows (Workflow Settings -> Error Workflow). Captures failure context and routes it through the channel-abstracted Notify sub-workflow. Kept intentionally minimal: a complex error handler fails itself."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "bbbbbbbb-0000-0000-0000-000000000001",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull the useful bits out of n8n's error payload.\nconst e = $input.first().json;\nconst wf = e.workflow?.name || 'unknown workflow';\nconst node = e.execution?.lastNodeExecuted || 'unknown node';\nconst msg = e.execution?.error?.message || e.trigger?.error?.message || 'no message';\nconst url = e.execution?.url || '';\nreturn [{ json: {\n  severity: 'error',\n  title: `Workflow failed: ${wf}`,\n  message: `Node: ${node}\\nError: ${msg}${url ? '\\n' + url : ''}`,\n  source: 'n8n error-trigger'\n} }];"
+      },
+      "id": "bbbbbbbb-0000-0000-0000-000000000002",
+      "name": "Build context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "aicp-notify",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "id": "bbbbbbbb-0000-0000-0000-000000000003",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Build context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build context": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "active": false
+}

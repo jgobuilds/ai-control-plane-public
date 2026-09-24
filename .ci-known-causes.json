@@ -1,0 +1,106 @@
+{
+  "_comment": "Causes specific to THIS repo, unioned with the shared table in scripts/ci-known-causes.json. Same field shape. Put a row here when the cause is about this project; put it in ai-standards (and re-vendor) when any repo could hit it. Every row needs a `prevent` mechanism as well as a `fix` — the corpus asserts it, because prevention is the half that gets skipped once the build is green again.",
+  "causes": [
+    {
+      "id": "dependabot-directory-has-no-manifest",
+      "match": [
+        "no dockerfiles nor kubernetes yaml found",
+        "error during file fetching"
+      ],
+      "same_line": false,
+      "cause": "A .github/dependabot.yml entry names a directory that holds no manifest for its ecosystem (here: package-ecosystem docker with directory \"/\", but every Dockerfile is in a service subdirectory). The updater aborts before proposing anything.",
+      "fix": "Give each ecosystem one entry per directory that actually contains its manifest. Then `python scripts/dependabot_check.py` — it fails on exactly this and needs no network or credentials.",
+      "confidence": "high",
+      "first_seen": "2026-08-03",
+      "_note": "Found by the recurrence register, not by a person: it had failed identically five days running and each single red run looked survivable. The damage was silent — Dependabot is the half of dependency-security that OPENS the fixing PR, so while the scanner kept reporting clean the repo had proposed no bumps at all.",
+      "prevent": "scripts/dependabot_check.py in CI. Adding an ecosystem entry and pointing it at a real manifest directory is one action, not two."
+    },
+    {
+      "id": "n8n-cannot-write-files",
+      "match": [
+        "is not writable"
+      ],
+      "cause": "n8n's Read/Write Files node cannot write at any path in the hardened image — not a permissions or mount problem.",
+      "fix": "Do not have n8n persist anything. Put the state in a service we control (router, lanes) or in workflow static data. See the ADR 0006 addendum.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "State lives in a service we control (router, lanes) or in workflow static data. n8n is never given a persistence job, so the limitation cannot be rediscovered."
+    },
+    {
+      "id": "auth-token-not-fail-closed",
+      "match": [
+        "FAIL",
+        "uses required ${VAR:?} form"
+      ],
+      "cause": "An auth token in docker-compose.yml uses ${VAR:-} (defaults to empty) instead of ${VAR:?} (refuses to start).",
+      "fix": "Change that variable to ${VAR:?set it in .env}. An empty token does not fail loudly — it makes every call 401.",
+      "confidence": "high",
+      "first_seen": "2026-07-25",
+      "same_line": true,
+      "_note": "Matched a PASS line before same_line existed: the security test prints the rule name whether it passes or fails.",
+      "prevent": "scripts/security_test.py asserts every auth token in compose uses the required ${VAR:?} form. An empty token that 401s every call is caught before it starts, not after."
+    },
+    {
+      "id": "workflow-missing-description",
+      "match": [
+        "no meta.description"
+      ],
+      "cause": "A workflow has no meta.description, so it would render as a blank row in the use-case register.",
+      "fix": "Add meta.description to each file named in the error. The register is the inventory; a blank row is worse than a missing one.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "prevent": "scripts/workflow_lint.py fails CI on a workflow with no meta.description, so the register cannot acquire a blank row in the first place."
+    },
+    {
+      "id": "n8n-schedule-needs-restart-after-cli-activate",
+      "match": [
+        "active",
+        "no executions"
+      ],
+      "cause": "A workflow activated via `n8n update:workflow --active=true` shows active=1 in the database but its Schedule Trigger is not registered with the running process, so it never fires.",
+      "fix": "Restart the n8n container after activating from the CLI. Same class as the webhook-registration lesson already recorded in ADR 0006.",
+      "prevent": "n8n_bootstrap.py --activate should restart n8n, or print the restart as a required next step, rather than reporting success on a workflow that will not fire.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "_note": "Found by checking the EXECUTION count rather than trusting the active flag. 'Activated' and 'running' are different facts, and the flag only proves the first."
+    },
+    {
+      "id": "lanes-endpoint-added-but-container-not-rebuilt",
+      "match": [
+        "no such lane"
+      ],
+      "cause": "A new endpoint was added to lanes/server.py but the running container still has the old code. server.py is BAKED INTO THE IMAGE at /srv/server.py; only ./scripts is bind-mounted, so editing the host file changes nothing until a rebuild.",
+      "fix": "docker compose up -d --build lanes. Then verify the route exists in the container rather than on the host.",
+      "prevent": "The scripts/ bind mount is what makes this surprising — script edits take effect immediately, so server.py silently behaves differently from everything beside it. Any change to server.py needs a rebuild in the same action.",
+      "confidence": "high",
+      "first_seen": "2026-07-26",
+      "_note": "Cost two errored unattended runs. The lane was correct, the workflow was correct, the endpoint was correct on disk, and the 404 came from code that had been running for seven hours."
+    },
+    {
+      "id": "n8n-if-typed-operator-fails-on-null",
+      "match": [
+        "is a string but was expecting a number"
+      ],
+      "cause": "An n8n IF node uses a TYPED operator (e.g. type 'number', operation 'exists') against a field that is null. Strict type validation rejects it before the operation runs, so the node errors on a value the payload uses deliberately.",
+      "fix": "Use a boolean EXPRESSION as leftValue — `={{ $json.x !== null && $json.x !== undefined }}` with operator {type: boolean, operation: true, singleValue: true}. That sidesteps type coercion entirely.",
+      "prevent": "Design payloads so 'nothing happened' is a value the gate can read without coercion, and prefer boolean expressions over typed operators in IF nodes whose input can be null. A null that means 'normal' must not be able to fail the branch that tests for it.",
+      "confidence": "high",
+      "first_seen": "2026-07-27",
+      "_note": "The dispatch lane errored on its OWN HEALTHY STATE: `dispatched: null` is the designed empty-queue result, and the gate meant to detect it is what failed."
+    },
+    {
+      "id": "governance-gate-crashed-instead-of-failing",
+      "match": [
+        "traceback (most recent call last)",
+        "conformance_test.py\", line"
+      ],
+      "same_line": false,
+      "cause": "conformance_test.py raised an unhandled exception partway through its run, so the log holds a traceback instead of a verdict. This is NOT the same as a check failing: every check after the crash point never ran, and the partial output of PASS lines above the traceback reads exactly like a clean one. The C1 mount proof is the usual site, because it is the only section that resolves scope ancestry — a malformed or mid-migration scopes.json (unknown scope name, dangling parent, parent cycle) makes ancestry unresolvable, and the naive walk crashed on it.",
+      "fix": "Read the traceback's own line number first — the crash is the finding, not the FAIL lines above it, which are an incomplete run. If it is ancestry, run `python scripts/conformance_test.py` locally against the same tree (AICP_INSTANCE=<overlay>); the topology precondition now names the offending scope. Treat every check below the crash as UNKNOWN and re-run once the tree resolves.",
+      "prevent": "scripts/conformance_test.py resolves every scope's ancestry as an explicit PRECONDITION before the C1 proof, and stops there with a named FAIL saying the proof was not evaluated. chain() raises TopologyError with the offending scope rather than KeyError, and refuses to loop on a parent cycle. tests/topology_test.py holds it: it synthesises all three malformed trees and asserts exit!=0 AND no traceback AND a 60s timeout — verified failing against the pre-fix walk on 2026-09-07.",
+      "confidence": "high",
+      "first_seen": "2026-07-31",
+      "_note": "Issue #7, and the reason it stayed open five weeks. ci_diagnose did its job exactly right — it matched nothing and escalated — but a crash produces no signature to match, so the escalation could not say more than 'unrecognised'. The instance was fixed by 4d2f774 two and a half minutes after the ticket opened, which is precisely why nobody came back to it: the build was green again before the ticket was read. The row exists so the next gate crash is diagnosed as a crash rather than re-filed as a mystery. Recurrence doctrine: seen once, fix the instance; the CLASS being undiagnosable is itself the second occurrence."
+    }
+  ]
+}

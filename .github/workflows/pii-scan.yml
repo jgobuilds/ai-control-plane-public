@@ -1,0 +1,211 @@
+# PII scan in CI — installed by the shared standards installer
+# (install_controls.py --with-ci). Deliberately does NOT name the repo it came
+# from: this file is installed into PUBLIC repos too, and naming a private
+# sibling in a world-readable comment discloses that the sibling exists.
+# Do not hand-edit: the installer rewrites it. Change the template instead.
+#
+# WHY A SEPARATE WORKFLOW rather than a step inside an existing one: repos here
+# have differently-shaped quality pipelines, and editing someone's YAML by
+# machine is how a working pipeline gets silently broken. A dedicated file
+# collides with nothing.
+#
+# WHY THE SCANNER IS VENDORED: CI checks out this repository alone. It cannot
+# reach a private sibling, and making it try would contradict the rule the whole
+# standard rests on — "a repo must stand alone". `scripts/pii_scan.py` is a
+# byte-identical copy, re-synced by `install_controls.py --all` on every sweep,
+# because a copy's real cost is drift and a security control that has quietly
+# fallen behind is worse than one that is plainly absent.
+name: pii-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The scanner DELEGATES secret detection to gitleaks when present, falling
+      # back to two hand-written patterns when it is not. Installing it is the
+      # single largest detection gain available here — its ruleset is maintained
+      # and ours is a stopgap.
+      #
+      # Pinned by VERSION *and* SHA256, per dependency-security.md: a tag can be
+      # re-pointed at new bytes, a checksum cannot. This is a security tool
+      # running against every commit, which is exactly where an unpinned download
+      # is least acceptable.
+      - name: Install gitleaks (pinned)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          curl -sSfL -o gl.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gl.tgz" | sha256sum -c -
+          tar -xzf gl.tgz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          rm -f gl.tgz
+          gitleaks version
+
+      # --tree, NOT --staged. Staged-only scans NOTHING in CI, where nothing is
+      # ever staged after a checkout: it loops over an empty list and exits 0 —
+      # green while checking nothing. That exact fake gate was found once in this
+      # fleet already. A gate that cannot fail is not a gate.
+      - name: PII scan (whole tree)
+        run: |
+          set -o pipefail
+          python scripts/pii_scan.py . --tree --visibility private --max-tier P2 | tee scan.log
+
+      # PROVE THE STRONGER ENGINE ACTUALLY RAN. The scanner degrades to built-in
+      # patterns whenever gitleaks cannot be called — which is precisely what
+      # happened for months when the bridge targeted `detect`/`protect`,
+      # subcommands removed in gitleaks v8.19+. It reported "engine: built-in
+      # only" on machines that HAD gitleaks installed, and nothing failed.
+      # "Installed" is not "in use", and only this step can tell them apart.
+      - name: Assert gitleaks was the engine
+        run: |
+          grep -q "engine: gitleaks" scan.log || {
+            echo "::error::gitleaks was installed but the scan fell back to built-in patterns."
+            echo "Most likely a CLI change. Check run_gitleaks() in scripts/pii_scan.py."
+            exit 1
+          }
+
+  # CI failures reach a channel — an autonomous break nobody sees is a break that
+  # keeps happening. No-ops when the URL secret is unset. This block is
+  # DELIBERATELY duplicated across the fleet rather than shared: each repo must
+  # stand alone. See the shared ci-notifications reference for the contract.
+  notify:
+    needs: scan
+    if: failure()
+    runs-on: ubuntu-latest
+    # Least privilege, and each is needed: actions: read lets the diagnostician
+    # read the failed job's log (a permissions: block REPLACES the default set,
+    # so omitting it silently 403s); contents/issues/pull-requests: write let it
+    # comment on the commit or the PR. Nothing else — the poster has no rerun or
+    # git-write path and the token should not offer it one.
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      # The notify job runs on a fresh runner, so the diagnostician's own source
+      # and its known-cause table have to be checked out before it can run.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Diagnose BEFORE notifying, so the alert carries a cause rather than just
+      # a red X. Deterministic only: a known cause costs nothing and cannot
+      # hallucinate; an unknown one says so instead of inventing one.
+      #
+      # This step CANNOT fix anything — see the tool's header for why an agent
+      # rewarded for green CI learns to file down the gates.
+      - name: Diagnose the failure (advise only)
+        id: diagnose
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          # Per-JOB logs, not `gh run view --log-failed`. This job is part of the
+          # run it reports on, so the run is still in progress and its archived
+          # log does not exist yet — that call returns something non-empty but
+          # useless, which gets reported as an unrecognised failure.
+          : > /tmp/ci.log
+          IDS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100"                   --jq '.jobs[] | select(.conclusion=="failure") | .id' 2>/dev/null || true)
+          for id in $IDS; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" >> /tmp/ci.log 2>/dev/null || true
+          done
+          if [ ! -s /tmp/ci.log ]; then
+            echo "failed to get run: could not read any failed job log" > /tmp/ci.log
+            echo "::warning::could not read the failure log — check that this job grants actions: read"
+          fi
+          # Has this workflow EVER concluded successfully? It is the single most
+          # load-bearing fact about a red build and the run list does not show
+          # it: a first-run failure and a regression look identical there and
+          # need opposite responses. One workflow in this fleet failed 7 for 7
+          # while everyone looked for what the last commit had broken.
+          # Looked up here rather than in the tool, which has no network by
+          # design. Defaults to "unknown", never to a guess.
+          EVER=unknown
+          # Strip at the @ BEFORE taking the basename. GITHUB_WORKFLOW_REF is
+          # owner/repo/.github/workflows/x.yml@refs/heads/main — basename first
+          # returns "main", which resolves to no workflow at all and silently
+          # yields "unknown" forever. Verified against the real API, not assumed.
+          WF_FILE="${GITHUB_WORKFLOW_REF%%@*}"; WF_FILE="${WF_FILE##*/}"
+          if SUCCESSES=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WF_FILE/runs?status=success&per_page=1" --jq '.total_count' 2>/dev/null); then
+            [ "$SUCCESSES" -gt 0 ] 2>/dev/null && EVER=yes || EVER=no
+          fi
+          echo "workflow has ever passed: $EVER"
+          python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" > /tmp/diag.txt 2>&1 || true
+          python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" --json > /tmp/diag.json 2>/dev/null || echo '{}' > /tmp/diag.json
+          cat /tmp/diag.txt
+          # The ALERT gets one line; the full diagnosis goes in the comment,
+          # which is a click away and does not compete for attention with every
+          # other message in the channel.
+          BLUF=$(python scripts/ci_diagnose.py --log /tmp/ci.log --ever-green "$EVER" --bluf 2>/dev/null | head -1)
+          echo "BLUF=${BLUF:-CI failed; no diagnosis produced.}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Put the cause where the failure is already being discussed: a comment on
+      # the PR (or the commit) and the run-page job summary. Zero configuration.
+      - name: Comment the diagnosis on GitHub
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/ci_comment.py --diagnosis /tmp/diag.json --target github
+
+      - name: Notify on failure
+        env:
+          KIND: ${{ vars.NOTIFY_KIND || 'slack' }}
+          SLACK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEAMS_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          MENTION: ${{ vars.NOTIFY_SLACK_MENTION }}
+          BLUF: ${{ steps.diagnose.outputs.BLUF }}
+        run: |
+          case "$KIND" in
+            slack) URL="$SLACK_URL" ;;
+            teams) URL="$TEAMS_URL" ;;
+            *)     URL="$WEBHOOK_URL" ;;
+          esac
+          if [ -z "$URL" ]; then
+            echo "No webhook URL for NOTIFY_KIND=$KIND — skipping."
+            exit 0
+          fi
+          SHA="${GITHUB_SHA:0:8}"
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          FALLBACK="PII scan failed: $GITHUB_REPOSITORY @ $SHA on $GITHUB_REF_NAME - $RUN"
+          case "$MENTION" in
+            channel) MENTION="<!channel>" ;;
+            here)    MENTION="<!here>" ;;
+            *)       : ;;
+          esac
+          case "$KIND" in
+            slack)
+              BODY=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$SHA" --arg branch "$GITHUB_REF_NAME" --arg run "$RUN" --arg fb "$FALLBACK" --arg mention "$MENTION" --arg diag "$DIAG" '($mention | if . == "" then "" else . + " " end) as $m | { text: ($m + $fb), blocks: [ { type:"section", text:{ type:"mrkdwn", text:($m + ":lock: *PII scan failed* — `" + $repo + "`") } }, { type:"section", fields:[ { type:"mrkdwn", text:("*Branch:* " + $branch) }, { type:"mrkdwn", text:("*Commit:* `" + $sha + "`") } ] }, { type:"section", text:{ type:"mrkdwn", text:(":mag: " + $diag) } }, { type:"actions", elements:[ { type:"button", text:{ type:"plain_text", text:"View run" }, url:$run, style:"danger" } ] } ] }') ;;
+            teams)
+              BODY=$(jq -nc --arg t "$FALLBACK" '{"@type":"MessageCard","@context":"http://schema.org/extensions","summary":"PII scan failure","themeColor":"D64545","text":$t}') ;;
+            *)
+              BODY=$(jq -nc --arg t "$FALLBACK" '{text:$t}') ;;
+          esac
+          curl -fsS -X POST -H 'content-type: application/json' -d "$BODY" "$URL" || echo "notify POST failed (non-fatal) — CI status already shows the failure"
+
+      # The detail, threaded under the alert. Runs AFTER the alert because it
+      # replies to it. Needs a BOT TOKEN: an incoming webhook returns no message
+      # ts, so a webhook alert cannot be threaded at all — with webhook-only
+      # setup this step reports that and skips.
+      - name: Reply with the diagnosis in the Slack thread
+        continue-on-error: true
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+        run: python scripts/ci_comment.py --diagnosis /tmp/diag.json --target slack

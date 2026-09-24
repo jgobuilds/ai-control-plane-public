@@ -1,0 +1,8 @@
+{
+  "name": "gemini-runner-agent-tools",
+  "private": true,
+  "description": "Agent CLI baked into gemini-runner, installed with `npm ci` into a root-owned prefix. Exact version + package-lock.json pin the whole tree. See the Dockerfile for how versions are chosen.",
+  "dependencies": {
+    "@google/gemini-cli": "0.59.0"
+  }
+}
